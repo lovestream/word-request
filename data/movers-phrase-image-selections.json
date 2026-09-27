@@ -1,0 +1,486 @@
+{
+  "source": "Wikimedia Commons",
+  "selectionPolicy": "Exact file titles selected after semantic and child-safety visual review.",
+  "items": [
+    {
+      "sourceNumber": 1,
+      "phrase": "in a cage",
+      "query": "rabbits in a cage",
+      "fileTitle": "File:Rabbits in a cage.jpg"
+    },
+    {
+      "sourceNumber": 2,
+      "phrase": "on his farm",
+      "query": "farmer standing on farm",
+      "fileTitle": "File:Ohio farmer David Brandt.jpg"
+    },
+    {
+      "sourceNumber": 3,
+      "phrase": "funny comic books",
+      "query": "child reading comic books",
+      "fileTitle": "File:Caught Reading.jpg"
+    },
+    {
+      "sourceNumber": 4,
+      "phrase": "next to",
+      "query": "two objects next to each other",
+      "fileTitle": "File:Two trees standing next to each other.jpg"
+    },
+    {
+      "sourceNumber": 5,
+      "phrase": "shop assistant/shop keeper",
+      "query": "shop assistant cashier helping customer",
+      "fileTitle": "File:Wal-Mart checkout.jpg"
+    },
+    {
+      "sourceNumber": 6,
+      "phrase": "How much?",
+      "query": "price tag icon",
+      "fileTitle": "File:Price Tag Flat Icon Vector.svg"
+    },
+    {
+      "sourceNumber": 7,
+      "phrase": "in front of",
+      "query": "family in front of house",
+      "fileTitle": "File:Family in front of their house - NARA - 285847.jpg"
+    },
+    {
+      "sourceNumber": 8,
+      "phrase": "pay for",
+      "query": "shopper paying for groceries cashier",
+      "fileTitle": "File:Shopper paying for groceries at cashier at Aeon Mall Morioka.jpg"
+    },
+    {
+      "sourceNumber": 9,
+      "phrase": "walk the dog",
+      "query": "girl walking a dog",
+      "fileTitle": "File:Girl walking dog 001.jpg"
+    },
+    {
+      "sourceNumber": 10,
+      "phrase": "go roller-skating",
+      "query": "child roller skating",
+      "fileTitle": "File:Child roller skating with pillows LCCN2016893864.jpg"
+    },
+    {
+      "sourceNumber": 11,
+      "phrase": "at the party",
+      "query": "children at birthday party",
+      "fileTitle": "File:A group of children enjoy a birthday celebration, clapping and cheering as one child stands at the front.jpg"
+    },
+    {
+      "sourceNumber": 12,
+      "phrase": "plenty of",
+      "query": "many apples plenty of fruit",
+      "fileTitle": "File:Apples fruit.jpg"
+    },
+    {
+      "sourceNumber": 13,
+      "phrase": "having fun",
+      "query": "children having fun playing",
+      "fileTitle": "File:Children playing.jpg"
+    },
+    {
+      "sourceNumber": 14,
+      "phrase": "making lots of noise",
+      "query": "child making lots of noise drum",
+      "fileTitle": "File:Boy playing a drum.jpg"
+    },
+    {
+      "sourceNumber": 15,
+      "phrase": "making friends",
+      "query": "two children friends holding hands",
+      "fileTitle": "File:Friendship Holding hands..jpg"
+    },
+    {
+      "sourceNumber": 16,
+      "phrase": "wrap a present",
+      "query": "wrapping a gift",
+      "fileTitle": "File:Gift wrapping in a jewellery shop 1.jpg"
+    },
+    {
+      "sourceNumber": 17,
+      "phrase": "unwrap a present",
+      "query": "person opening a Christmas present",
+      "fileTitle": "File:A soldier opening his Princess Mary Gift Tin Christmas 1914.jpg"
+    },
+    {
+      "sourceNumber": 18,
+      "phrase": "make a wish",
+      "query": "child making a birthday wish",
+      "fileTitle": "File:Birthday-wish.jpg"
+    },
+    {
+      "sourceNumber": 19,
+      "phrase": "upstairs and downstairs",
+      "query": "upstairs downstairs staircases",
+      "fileTitle": "File:Upstairs-downstairs (27396305498).jpg"
+    },
+    {
+      "sourceNumber": 20,
+      "phrase": "chat with friends",
+      "query": "friends talking together at a table",
+      "fileTitle": "File:Friends talking at table.jpg"
+    },
+    {
+      "sourceNumber": 21,
+      "phrase": "get healthy",
+      "query": "children exercising get healthy",
+      "fileTitle": "File:African children doing an exercise.jpg"
+    },
+    {
+      "sourceNumber": 22,
+      "phrase": "have a headache",
+      "query": "person suffering from headache illustration",
+      "fileTitle": "File:Depiction of a person suffering from a headache.png"
+    },
+    {
+      "sourceNumber": 23,
+      "phrase": "have a runny nose",
+      "query": "person with common cold runny nose illustration",
+      "fileTitle": "File:A lady suffering from the Common Cold.png"
+    },
+    {
+      "sourceNumber": 24,
+      "phrase": "have a stomachache",
+      "query": "stomachache abdominal pain illustration",
+      "fileTitle": "File:Abdominal pain hariadhi.svg"
+    },
+    {
+      "sourceNumber": 25,
+      "phrase": "measure temperature",
+      "query": "checking temperature with infrared thermometer",
+      "fileTitle": "File:Hand holding non-contact infrared thermometer checking a person temprature. COVID-19 Concept.jpg"
+    },
+    {
+      "sourceNumber": 26,
+      "phrase": "take medicine",
+      "query": "taking medicine illustration",
+      "fileTitle": "File:Taking Medicine.jpg"
+    },
+    {
+      "sourceNumber": 27,
+      "phrase": "feel dizzy",
+      "query": "person feeling dizzy illustration",
+      "fileTitle": "File:Depiction of a person feeling dizzy.png"
+    },
+    {
+      "sourceNumber": 28,
+      "phrase": "I don't feel well",
+      "query": "sick child bed",
+      "fileTitle": "File:A sick child in bed has his castor oil medicine poured for h Wellcome V0015144.jpg"
+    },
+    {
+      "sourceNumber": 29,
+      "phrase": "How do you feel?",
+      "query": "emotion faces cartoon",
+      "fileTitle": "File:EmotionCartoon.svg"
+    },
+    {
+      "sourceNumber": 30,
+      "phrase": "have an earache",
+      "query": "ear pain",
+      "fileTitle": "File:Depiction of a patient suffering from ear pain (Otalgia).png"
+    },
+    {
+      "sourceNumber": 31,
+      "phrase": "Let's go to the pool.",
+      "query": "children swimming pool",
+      "fileTitle": "File:Children in a swimming pool in kampala.jpg"
+    },
+    {
+      "sourceNumber": 32,
+      "phrase": "go upstairs",
+      "query": "stairs pictogram up",
+      "fileTitle": "File:上り専用 (51269389).jpg"
+    },
+    {
+      "sourceNumber": 33,
+      "phrase": "the map of the city",
+      "query": "city map illustration",
+      "fileTitle": "File:1842 S.D.U.K. Map of the City of Calcutta, India - Geographicus - Calcutta-sduk-1842.jpg"
+    },
+    {
+      "sourceNumber": 34,
+      "phrase": "take a lift",
+      "query": "elevator pictogram",
+      "fileTitle": "File:PANYNJ Pictogram 4-21.svg"
+    },
+    {
+      "sourceNumber": 35,
+      "phrase": "the address of the hotel",
+      "query": "hotel map symbol",
+      "fileTitle": "File:Map Icon - Hotel.png"
+    },
+    {
+      "sourceNumber": 36,
+      "phrase": "have a seat",
+      "query": "sitting person icon",
+      "fileTitle": "File:Person sitting in seat Pinhead icon.svg"
+    },
+    {
+      "sourceNumber": 37,
+      "phrase": "call room service",
+      "query": "hotel room service telephone",
+      "fileTitle": "File:Ordering room service (3454461907).jpg"
+    },
+    {
+      "sourceNumber": 38,
+      "phrase": "call the front desk",
+      "query": "hotel receptionist phone",
+      "fileTitle": "File:Receptionist.jpg"
+    },
+    {
+      "sourceNumber": 39,
+      "phrase": "on the first floor",
+      "query": "\"button 1\" elevator",
+      "fileTitle": "File:Elevator panel with Braille.jpg"
+    },
+    {
+      "sourceNumber": 40,
+      "phrase": "take the towel with you",
+      "query": "child beach towel",
+      "fileTitle": "File:Child standing on sandy beach wearing a colorful towel undefined.jpg"
+    },
+    {
+      "sourceNumber": 41,
+      "phrase": "take a trip",
+      "query": "family travel luggage",
+      "fileTitle": "File:Kid's Luggage Packed for Family Holiday.jpg"
+    },
+    {
+      "sourceNumber": 42,
+      "phrase": "have breakfast/lunch",
+      "query": "children eating breakfast",
+      "fileTitle": "File:Elementary school (2nd grade) students eating school breakfast in the cafeteria - 20210727-FNS-UNC-0009.jpg"
+    },
+    {
+      "sourceNumber": 43,
+      "phrase": "cross over the bridge",
+      "query": "person walking across bridge",
+      "fileTitle": "File:Students walking across bridge (54033683375).jpg"
+    },
+    {
+      "sourceNumber": 44,
+      "phrase": "walking in the jungle",
+      "query": "walking jungle trail",
+      "fileTitle": "File:Trekking through the Verdant jungle landscape.jpg"
+    },
+    {
+      "sourceNumber": 45,
+      "phrase": "go skating",
+      "query": "children ice skating",
+      "fileTitle": "File:Children ice-skating.jpg"
+    },
+    {
+      "sourceNumber": 46,
+      "phrase": "wait for a bus",
+      "query": "people waiting bus stop",
+      "fileTitle": "File:Waiting for bus at a bus stop in Hyderabad.jpg"
+    },
+    {
+      "sourceNumber": 47,
+      "phrase": "treasure hunt",
+      "query": "treasure map",
+      "fileTitle": "File:Mappa del tesoro.png"
+    },
+    {
+      "sourceNumber": 48,
+      "phrase": "climb up the mountain",
+      "query": "hiker climbing mountain",
+      "fileTitle": "File:Hikers climbing Mount Cameroon Mountain.jpg"
+    },
+    {
+      "sourceNumber": 49,
+      "phrase": "work together",
+      "query": "children teamwork together",
+      "fileTitle": "File:Teamwork (19738727112).jpg"
+    },
+    {
+      "sourceNumber": 50,
+      "phrase": "escape from the city",
+      "query": "leaving city sign",
+      "fileTitle": "File:Jicotea City Limits sign leaving, 2023.jpg"
+    },
+    {
+      "sourceNumber": 51,
+      "phrase": "on Sunday",
+      "query": "English Sunday calendar",
+      "fileTitle": "File:Calendar 2018 05.png"
+    },
+    {
+      "sourceNumber": 52,
+      "phrase": "in the sun",
+      "query": "children playing sunny day",
+      "fileTitle": "File:Children play and share snacks on a sunny day in a green park, enjoying time together with laughter and joy.jpg"
+    },
+    {
+      "sourceNumber": 53,
+      "phrase": "in spring",
+      "query": "spring flowers landscape",
+      "fileTitle": "File:Spring Flowers in Red Rock Canyon National Conservation Area.jpg"
+    },
+    {
+      "sourceNumber": 54,
+      "phrase": "at night",
+      "query": "starry night landscape",
+      "fileTitle": "File:Van Gogh - Starry Night - Google Art Project.jpg"
+    },
+    {
+      "sourceNumber": 55,
+      "phrase": "at noon",
+      "query": "sun at noon midday",
+      "fileTitle": "File:Sun at noon.jpg"
+    },
+    {
+      "sourceNumber": 56,
+      "phrase": "at the weekend",
+      "query": "family weekend picnic",
+      "fileTitle": "File:Family Weekend (6283542652).jpg"
+    },
+    {
+      "sourceNumber": 57,
+      "phrase": "put on (clothes)",
+      "query": "donning clothes person",
+      "fileTitle": "File:Sue Cameron dons her caving clothes (39123408655).jpg"
+    },
+    {
+      "sourceNumber": 58,
+      "phrase": "take off (clothes)",
+      "query": "person taking off shoes",
+      "fileTitle": "File:The Peasant Taking off his Shoes Met DP888306.jpg"
+    },
+    {
+      "sourceNumber": 59,
+      "phrase": "It's a sunny day.",
+      "query": "sunny day blue sky",
+      "fileTitle": "File:Wooden footbridge in Shinjuku Gyoen National Garden, Tokyo, Japan, a sunny day with blue sky.jpg"
+    },
+    {
+      "sourceNumber": 60,
+      "phrase": "build a snowman",
+      "query": "children building snowman",
+      "fileTitle": "File:Children building snowman - A Merry Go-Round (1888) - Constance Haslewood.png"
+    },
+    {
+      "sourceNumber": 61,
+      "phrase": "at the station",
+      "query": "railway station passengers platform",
+      "fileTitle": "File:Cardiff Central railway station MMB 31 43186 150217.jpg"
+    },
+    {
+      "sourceNumber": 62,
+      "phrase": "go straight",
+      "query": "go straight road sign",
+      "fileTitle": "File:SA road sign - Go straight.svg"
+    },
+    {
+      "sourceNumber": 63,
+      "phrase": "study at the library",
+      "query": "students studying library",
+      "fileTitle": "File:Sias Library - Students Studying 2017.jpg"
+    },
+    {
+      "sourceNumber": 64,
+      "phrase": "town square",
+      "query": "town square people",
+      "fileTitle": "File:People on Old Town Square 3.jpg"
+    },
+    {
+      "sourceNumber": 65,
+      "phrase": "in a circle",
+      "query": "children standing circle",
+      "fileTitle": "File:Girls' dodge ball game on school playground. Girls standing in circle and girl in middle holding ball LCCN2003655391.jpg"
+    },
+    {
+      "sourceNumber": 66,
+      "phrase": "carry a baby",
+      "query": "mother carrying baby",
+      "fileTitle": "File:Tibetan mother carrying a baby at Potala in 2006.jpg"
+    },
+    {
+      "sourceNumber": 67,
+      "phrase": "drop litter",
+      "query": "littering sign",
+      "fileTitle": "File:Singapore Prohibition-signs-10 (cropped, no littering).jpg"
+    },
+    {
+      "sourceNumber": 68,
+      "phrase": "local supermarket",
+      "query": "local supermarket interior shopping",
+      "fileTitle": "File:Produce department at Sauders Store, Seneca Falls, New York - 20221208.jpg"
+    },
+    {
+      "sourceNumber": 69,
+      "phrase": "outside the city center",
+      "query": "city outskirts landscape",
+      "fileTitle": "File:Typical suburban street in the United States.tif"
+    },
+    {
+      "sourceNumber": 70,
+      "phrase": "a large shopping center",
+      "query": "large shopping mall interior",
+      "fileTitle": "File:Large interior view of Plaza Singapura Shopping mall Orchard Road Singapore.jpg"
+    },
+    {
+      "sourceNumber": 71,
+      "phrase": "go fishing",
+      "query": "child fishing",
+      "fileTitle": "File:Child fishing with traditional rod in rural India.jpg"
+    },
+    {
+      "sourceNumber": 72,
+      "phrase": "kick a ball",
+      "query": "kicking a ball soccer",
+      "fileTitle": "File:Boy Kicking Soccer Ball at Adirondack Camp in NY.jpg"
+    },
+    {
+      "sourceNumber": 73,
+      "phrase": "take a video",
+      "query": "video recording illustration",
+      "fileTitle": "File:Video recording - Videoaufzeichnung (Pixelchen).png"
+    },
+    {
+      "sourceNumber": 74,
+      "phrase": "write an email",
+      "query": "email computer person",
+      "fileTitle": "File:President Bill Clinton Writing an Email to Senator John Glenn.jpg"
+    },
+    {
+      "sourceNumber": 75,
+      "phrase": "text someone",
+      "query": "texting smartphone person",
+      "fileTitle": "File:Woman texting on a smartphone.jpg"
+    },
+    {
+      "sourceNumber": 76,
+      "phrase": "burst into laughter",
+      "query": "laughing boy",
+      "fileTitle": "File:Laughing boy at golden hour.jpg"
+    },
+    {
+      "sourceNumber": 77,
+      "phrase": "on the website",
+      "query": "web browser laptop",
+      "fileTitle": "File:Leo Meyerovich typing on laptop during Web Browser demo at Par Lab Retreat (8442841051).jpg"
+    },
+    {
+      "sourceNumber": 78,
+      "phrase": "skip over",
+      "query": "leapfrog children",
+      "fileTitle": "File:Children playing leapfrog - Raphael Tuck & Sons postcard - by Agnes Richardson, 1922.jpg"
+    },
+    {
+      "sourceNumber": 79,
+      "phrase": "dress up as",
+      "query": "children costume dress up public domain",
+      "fileTitle": "File:Who Doesn't Love to Dress Up? (7762107852).jpg"
+    },
+    {
+      "sourceNumber": 80,
+      "phrase": "sail for…",
+      "query": "sailboat sailing sea",
+      "fileTitle": "File:Sonic 23 sailboat Gyp Sea 5020.jpg"
+    }
+  ]
+}

@@ -1,0 +1,123 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta
+      name="description"
+      content="Kevin 的离线英语单词记忆乐园：图片联想、拼写训练、艾宾浩斯复习与积分成长。"
+    />
+    <meta name="theme-color" content="#173f3a" />
+    <title>Word Quest · Kevin 的单词探险</title>
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect rx='24' width='100' height='100' fill='%23ffcc4d'/%3E%3Ctext y='.84em' x='.08em' font-size='82'%3E🦊%3C/text%3E%3C/svg%3E"
+    />
+    <link rel="stylesheet" href="assets/styles.css" />
+  </head>
+  <body>
+    <div class="paper-grain" aria-hidden="true"></div>
+
+    <div class="app-shell">
+      <header class="topbar">
+        <button class="brand" type="button" data-route="home" aria-label="返回今日探险">
+          <span class="brand-mark" aria-hidden="true">
+            <span class="brand-tail"></span>
+            W
+          </span>
+          <span class="brand-copy">
+            <strong>WORD QUEST</strong>
+            <small id="brandSubtitle" data-zh="Kevin 的单词探险" data-en="Kevin's English Adventure">Kevin 的单词探险</small>
+          </span>
+        </button>
+
+        <div class="topbar-stats" aria-label="今日状态">
+          <div class="mini-stat streak-stat" title="连续学习天数">
+            <span aria-hidden="true">🔥</span>
+            <strong id="topStreak">1</strong>
+            <small data-zh="连续" data-en="STREAK">连续</small>
+          </div>
+          <div class="mini-stat coin-stat" title="探险金币">
+            <span aria-hidden="true">◉</span>
+            <strong id="topCoins">0</strong>
+            <small data-zh="金币" data-en="COINS">金币</small>
+          </div>
+          <button class="profile-chip" type="button" data-route="settings" aria-label="打开 Kevin 的设置">
+            <span class="avatar" aria-hidden="true">🦊</span>
+            <span>
+              <strong>Kevin</strong>
+              <small id="topLevel">Lv. 1 小探险家</small>
+            </span>
+          </button>
+        </div>
+      </header>
+
+      <aside class="side-rail" aria-label="主导航">
+        <nav class="main-nav">
+          <button class="nav-item is-active" type="button" data-route="home">
+            <span class="nav-icon" aria-hidden="true">⌂</span>
+            <span data-zh="今日任务" data-en="Today's Quest">今日任务</span>
+          </button>
+          <button class="nav-item" type="button" data-route="learn">
+            <span class="nav-icon" aria-hidden="true">✦</span>
+            <span data-zh="学习单词" data-en="Learn Words">学习单词</span>
+          </button>
+          <button class="nav-item" type="button" data-route="practice">
+            <span class="nav-icon" aria-hidden="true">✎</span>
+            <span data-zh="拼写训练" data-en="Spelling">拼写训练</span>
+          </button>
+          <button class="nav-item" type="button" data-route="review">
+            <span class="nav-icon" aria-hidden="true">↻</span>
+            <span data-zh="记忆地图" data-en="Review Map">记忆地图</span>
+            <span class="nav-badge" id="reviewBadge" hidden>0</span>
+          </button>
+          <button class="nav-item" type="button" data-route="books">
+            <span class="nav-icon" aria-hidden="true">▤</span>
+            <span data-zh="选择词库" data-en="Word Banks">选择词库</span>
+          </button>
+          <button class="nav-item" type="button" data-route="pk">
+            <span class="nav-icon" aria-hidden="true">⚑</span>
+            <span data-zh="好友 PK" data-en="Word Battle">好友 PK</span>
+            <span class="soon-pill" data-zh="试玩" data-en="BETA">试玩</span>
+          </button>
+        </nav>
+
+        <div class="rail-mascot" aria-hidden="true">
+          <span class="mascot-spark spark-one">✦</span>
+          <span class="mascot-spark spark-two">·</span>
+          <span class="mascot-face">🦊</span>
+          <p>Ready, Kevin?</p>
+        </div>
+      </aside>
+
+      <main id="viewRoot" class="view-root" tabindex="-1"></main>
+
+      <nav class="mobile-nav" aria-label="移动端导航">
+        <button class="mobile-nav-item is-active" type="button" data-route="home"><span>⌂</span><span data-zh="今日" data-en="Today">今日</span></button>
+        <button class="mobile-nav-item" type="button" data-route="learn"><span>✦</span><span data-zh="学习" data-en="Learn">学习</span></button>
+        <button class="mobile-nav-item mobile-action" type="button" data-route="practice"><span>✎</span><span data-zh="训练" data-en="Spell">训练</span></button>
+        <button class="mobile-nav-item" type="button" data-route="review"><span>↻</span><span data-zh="复习" data-en="Review">复习</span></button>
+        <button class="mobile-nav-item" type="button" data-route="books"><span>▤</span><span data-zh="词库" data-en="Books">词库</span></button>
+        <button class="mobile-nav-item" type="button" data-route="pk"><span>⚑</span><span data-zh="PK" data-en="Battle">PK</span></button>
+      </nav>
+    </div>
+
+    <div id="toastRegion" class="toast-region" role="status" aria-live="polite"></div>
+    <div id="confettiLayer" class="confetti-layer" aria-hidden="true"></div>
+
+    <dialog id="appDialog" class="app-dialog">
+      <div id="dialogBody"></div>
+    </dialog>
+
+    <noscript>
+      <div class="noscript-card">请在浏览器中启用 JavaScript，才能开始 Kevin 的单词探险。</div>
+    </noscript>
+
+    <script src="assets/words.js"></script>
+    <script src="assets/cambridge-official.js"></script>
+    <script src="assets/movers-2025.js"></script>
+    <script src="assets/core2000.js"></script>
+    <script src="assets/core2000-answers.js"></script>
+    <script src="assets/app.js"></script>
+  </body>
+</html>

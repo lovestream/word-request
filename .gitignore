@@ -1,0 +1,11 @@
+.DS_Store
+__pycache__/
+*.py[cod]
+
+# Local build, OCR, browser-test, and source-document workspaces
+tmp/
+output/
+.playwright-cli/
+
+# Portable learning records are personal data and stay local
+*.wordquest.json
