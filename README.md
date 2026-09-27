@@ -38,3 +38,7 @@ python3 -m unittest tests/test_launcher.py
 ```
 
 Source and image attribution details are recorded in [`SOURCES.md`](SOURCES.md).
+
+## Kevin's learning record
+
+The latest portable learning record is kept in [`learning-records/`](learning-records/). Download it and use **从记录文件恢复** in the website settings to continue from the saved progress on another computer.
