@@ -78,7 +78,8 @@
     practiceResult: null,
     practiceSource: null,
     pk: null,
-    storageConflict: false
+    storageConflict: false,
+    pendingImport: null
   };
 
   function resetTransientRuntime() {
@@ -101,6 +102,7 @@
       updatedAt: Date.now(),
       revision: 0,
       writerId: "",
+      lastImport: null,
       profile: { name: "Kevin", avatar: "🦊" },
       settings: {
         bank: "ket",
@@ -728,6 +730,11 @@
       updatedAt: finiteNumber(raw.updatedAt, raw.savedAt || Date.now(), 0, 9_999_999_999_999),
       revision: safeInteger(raw.revision, 0, 0, 1_000_000_000),
       writerId: safeText(raw.writerId, "", 180),
+      lastImport: raw.lastImport && typeof raw.lastImport === "object" && !Array.isArray(raw.lastImport) ? {
+        sourceSha256: /^[a-f0-9]{64}$/i.test(raw.lastImport.sourceSha256 || "") ? raw.lastImport.sourceSha256 : "",
+        importedAt: finiteNumber(raw.lastImport.importedAt, 0, 0, 9_999_999_999_999),
+        sourceSavedAt: finiteNumber(raw.lastImport.sourceSavedAt, 0, 0, 9_999_999_999_999)
+      } : null,
       profile: { name: "Kevin", avatar: "🦊" },
       settings,
       stats,
@@ -3198,6 +3205,7 @@
 
   function closeDialog() {
     clearPkTimer();
+    runtime.pendingImport = null;
     if (dialog.open) dialog.close();
   }
 
@@ -3214,11 +3222,49 @@
         learner: safeText(sourceState?.profile?.name, "Kevin", 80),
         activeBank: safeBank(sourceState?.settings?.bank, "ket"),
         xp: safeInteger(sourceState?.stats?.xp, 0),
-        learnedWords: Object.keys(sourceState?.progress || {}).length,
+        learnedWords: Object.keys(sourceState?.progress || {}).length + Object.keys(sourceState?.orphanProgress || {}).length,
         currentDate: safeDateKey(sourceState?.today?.date)
       },
       state: sourceState
     };
+  }
+
+  function portableStateSummary(sourceState) {
+    return {
+      savedAt: finiteNumber(sourceState?.updatedAt, sourceState?.savedAt || 0, 0, 9_999_999_999_999),
+      words: Object.keys(sourceState?.progress || {}).length + Object.keys(sourceState?.orphanProgress || {}).length,
+      xp: safeInteger(sourceState?.stats?.xp, 0),
+      coins: safeInteger(sourceState?.stats?.coins, 0),
+      pending: Array.isArray(sourceState?.today?.tasks)
+        ? sourceState.today.tasks.filter((task) => task?.status !== "done").length
+        : 0,
+      todayDate: safeDateKey(sourceState?.today?.date)
+    };
+  }
+
+  function importedRecordIsOlder(currentState, candidateState) {
+    const currentTime = portableStateSummary(currentState).savedAt;
+    const candidateTime = portableStateSummary(candidateState).savedAt;
+    return Boolean(currentTime && candidateTime && candidateTime < currentTime);
+  }
+
+  async function sha256Text(text) {
+    if (window.crypto?.subtle && typeof TextEncoder !== "undefined") {
+      const digest = await window.crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
+      return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+    }
+    return "";
+  }
+
+  function downloadPortableRecord(sourceState, filename, exportedAt = Date.now()) {
+    const payload = createPortableRecord(sourceState, exportedAt);
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = filename;
+    anchor.click();
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
   }
 
   function stateFromPortableRecord(parsed) {
@@ -3230,34 +3276,54 @@
   }
 
   function exportData() {
-    saveState();
-    const payload = createPortableRecord(state);
-    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
-    const url = URL.createObjectURL(blob);
-    const anchor = document.createElement("a");
-    anchor.href = url;
-    anchor.download = `Kevin-Word-Quest-学习记录-${localDateKey()}.wordquest.json`;
-    anchor.click();
-    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+    if (!saveState()) return;
+    downloadPortableRecord(state, `Kevin-Word-Quest-学习记录-${localDateKey()}.wordquest.json`);
     toast("学习记录文件已保存，可以拷到另一台 Mac", "📦");
   }
 
   async function importData(file) {
-    const previousState = state;
     try {
-      const parsed = JSON.parse(await file.text());
+      const text = await file.text();
+      const parsed = JSON.parse(text);
       const candidate = mergeState(stateFromPortableRecord(parsed), true);
-      state = candidate;
-      resetTransientRuntime();
-      ensureToday();
-      saveState();
-      render();
-      toast(`学习记录已经恢复：${Object.keys(state.progress).length} 个词的进度`, "✓");
+      const sourceSha256 = await sha256Text(text);
+      const before = portableStateSummary(state);
+      const after = portableStateSummary(candidate);
+      const older = importedRecordIsOlder(state, candidate);
+      runtime.pendingImport = { candidate, sourceSha256, before, after, filename: safeText(file.name, "学习记录", 180) };
+      const fingerprint = sourceSha256 || "当前浏览器环境不可用";
+      showDialog(`<div class="dialog-content"><div class="dialog-icon">${older ? "⚠️" : "📦"}</div><h2>先核对，再恢复学习记录</h2><p>${older ? "这份文件比当前浏览器记录更旧。只有确认它确实是主记录时才继续。" : "网站已完成只读校验；确认后会先下载当前记录的恢复点，再执行替换。"}</p><div class="import-compare"><div><small>当前浏览器</small><strong>${before.words} 个词 · ${before.xp} XP</strong><span>${before.coins} 金币 · ${before.pending} 个未完成任务</span></div><div><small>准备导入</small><strong>${after.words} 个词 · ${after.xp} XP</strong><span>${after.coins} 金币 · ${after.pending} 个未完成任务</span></div></div><p class="record-transfer-note">文件：${escapeHtml(runtime.pendingImport.filename)}<br />SHA-256：${escapeHtml(fingerprint)}</p><div class="dialog-actions"><button class="btn btn-soft" type="button" data-action="close-dialog">取消</button><button class="btn ${older ? "btn-coral" : "btn-primary"}" type="button" data-action="confirm-import">${older ? "我确认使用较旧记录" : "保存恢复点并导入"}</button></div></div>`);
     } catch (error) {
-      state = previousState;
+      runtime.pendingImport = null;
       console.warn(error);
       toast("这不是有效的 Word Quest 备份", "⚠️");
     }
+  }
+
+  function commitPendingImport() {
+    const pending = runtime.pendingImport;
+    if (!pending) return false;
+    const now = new Date();
+    const clock = `${String(now.getHours()).padStart(2, "0")}${String(now.getMinutes()).padStart(2, "0")}${String(now.getSeconds()).padStart(2, "0")}`;
+    downloadPortableRecord(state, `Kevin-Word-Quest-导入前恢复点-${localDateKey(now)}-${clock}.wordquest.json`, now.getTime());
+    const currentRevision = safeInteger(state.revision, 0, 0, 1_000_000_000);
+    const candidate = pending.candidate;
+    candidate.revision = Math.max(currentRevision, safeInteger(candidate.revision, 0, 0, 1_000_000_000));
+    candidate.writerId = WRITER_ID;
+    candidate.lastImport = {
+      sourceSha256: pending.sourceSha256,
+      importedAt: now.getTime(),
+      sourceSavedAt: pending.after.savedAt
+    };
+    state = candidate;
+    resetTransientRuntime();
+    runtime.pendingImport = null;
+    ensureToday();
+    saveState();
+    closeDialog();
+    render();
+    toast(`学习记录已经恢复：${portableStateSummary(state).words} 个词的进度`, "✓");
+    return true;
   }
 
   function startPk() {
@@ -3386,6 +3452,7 @@
     else if (action === "save-sprint-day") applySprintDay(document.getElementById("sprintDayInput")?.value);
     else if (action === "export-data") exportData();
     else if (action === "import-data") document.getElementById("importFile")?.click();
+    else if (action === "confirm-import") commitPendingImport();
     else if (action === "reset-data") confirmReset();
     else if (action === "confirm-reset") {
       localStorage.removeItem(STATE_KEY);
@@ -3656,6 +3723,8 @@
     selectAmericanVoice,
     buildStudySpeechSequence,
     createPortableRecord,
+    portableStateSummary,
+    importedRecordIsOlder,
     stateFromPortableRecord,
     normalizeExerciseAnswer,
     coreExerciseAnswerMatches,

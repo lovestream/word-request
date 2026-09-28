@@ -162,6 +162,30 @@ assert.equal(portableRecord.format, "kevin-word-quest-portable-record");
 assert.equal(portableRecord.formatVersion, 1);
 assert.equal(portableRecord.summary.activeBank, "core2000");
 assert.equal(portableRecord.summary.learnedWords, 1);
+const protectedSummary = api.portableStateSummary({
+  savedAt: 100,
+  updatedAt: 200,
+  progress: { a: {} },
+  orphanProgress: { missing: {} },
+  stats: { xp: 50, coins: 25 },
+  today: { date: "2026-08-26", tasks: [{ status: "queued" }, { status: "done" }] }
+});
+assert.deepEqual(JSON.parse(JSON.stringify(protectedSummary)), {
+  savedAt: 200,
+  words: 2,
+  xp: 50,
+  coins: 25,
+  pending: 1,
+  todayDate: "2026-08-26"
+});
+assert.equal(api.importedRecordIsOlder(
+  { updatedAt: 200, progress: {}, stats: {} },
+  { updatedAt: 100, progress: {}, stats: {} }
+), true);
+assert.equal(api.importedRecordIsOlder(
+  { updatedAt: 100, progress: {}, stats: {} },
+  { updatedAt: 200, progress: {}, stats: {} }
+), false);
 assert.equal(api.stateFromPortableRecord(portableRecord), portableRecord.state);
 assert.equal(api.stateFromPortableRecord({ schemaVersion: 1 }).schemaVersion, 1, "legacy JSON backups remain importable");
 assert.throws(() => api.stateFromPortableRecord({
