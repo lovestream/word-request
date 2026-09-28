@@ -34,6 +34,7 @@ The app is static and can be published directly with GitHub Pages or Cloudflare 
 node tests/test_word_banks.js
 node tests/test_app_regressions.js
 node tests/test_sprint_mode.js
+node tests/test_learning_record_tools.js
 python3 -m unittest tests/test_launcher.py
 ```
 

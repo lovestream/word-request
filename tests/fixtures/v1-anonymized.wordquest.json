@@ -1,0 +1,165 @@
+{
+  "format": "kevin-word-quest-portable-record",
+  "formatVersion": 1,
+  "exportedAt": "2025-01-15T12:00:00.000Z",
+  "state": {
+    "schemaVersion": 1,
+    "savedAt": 1736942400000,
+    "profile": {
+      "name": "Learner",
+      "avatar": "🦊"
+    },
+    "settings": {
+      "bank": "core2000",
+      "dailyGoal": 5,
+      "coreBatch": 2,
+      "practiceMode": "mixed",
+      "sprintDays": {
+        "core2000": 1,
+        "movers": 1,
+        "ket": 1,
+        "pet": 1
+      },
+      "autoSound": true,
+      "sound": true,
+      "typoAssist": true,
+      "showEnglish": true
+    },
+    "stats": {
+      "xp": 500,
+      "coins": 120,
+      "streak": 2,
+      "bestStreak": 3,
+      "combo": 1,
+      "bestCombo": 7,
+      "learned": 6,
+      "reviewed": 8,
+      "correct": 22,
+      "attempts": 28,
+      "lastGoalDate": "2025-01-14"
+    },
+    "progress": {
+      "core2000-fixture-01": {
+        "status": "reviewing",
+        "learnedAt": 1736506800000,
+        "step": 2,
+        "scheduleToken": 3,
+        "lapses": 1,
+        "correct": 3,
+        "dueAt": 1736938800000,
+        "lastSuccessAt": 1736766000000,
+        "initialModesDone": ["cloze", "full"]
+      },
+      "core2000-fixture-02": {
+        "status": "reviewing",
+        "learnedAt": 1736506800000,
+        "step": 5,
+        "scheduleToken": 6,
+        "lapses": 0,
+        "correct": 6,
+        "dueAt": 1737547200000,
+        "lastSuccessAt": 1736247600000,
+        "initialModesDone": ["cloze", "full"]
+      },
+      "core2000-fixture-03": {
+        "status": "learning",
+        "learnedAt": 1736935200000,
+        "step": 0,
+        "scheduleToken": 0,
+        "lapses": 0,
+        "correct": 0,
+        "dueAt": 1736935200000,
+        "lastSuccessAt": null,
+        "initialModesDone": []
+      },
+      "movers-fixture-01": {
+        "status": "learning",
+        "learnedAt": 1736852400000,
+        "step": 0,
+        "scheduleToken": 0,
+        "lapses": 0,
+        "correct": 0,
+        "dueAt": 1736852400000,
+        "lastSuccessAt": null,
+        "initialModesDone": []
+      },
+      "ket-fixture-01": {
+        "status": "reviewing",
+        "learnedAt": 1736074800000,
+        "step": 1,
+        "scheduleToken": 2,
+        "lapses": 2,
+        "correct": 2,
+        "dueAt": 1736931600000,
+        "lastSuccessAt": 1736762400000,
+        "initialModesDone": ["cloze", "full"]
+      },
+      "pet-fixture-01": {
+        "status": "reviewing",
+        "learnedAt": 1736074800000,
+        "step": 3,
+        "scheduleToken": 4,
+        "lapses": 0,
+        "correct": 4,
+        "dueAt": 1737806400000,
+        "lastSuccessAt": 1736683200000,
+        "initialModesDone": ["cloze", "full"]
+      }
+    },
+    "coreExercises": {
+      "fixture-exercise": {
+        "responses": ["a", "example"],
+        "correctIndices": [0, 1],
+        "wrongIndices": [],
+        "attempts": 2,
+        "completedAt": 1736856000000
+      }
+    },
+    "badges": {},
+    "scoreLedger": [
+      { "id": "fixture:reward:1", "xp": 10, "coins": 2, "at": 1736506800000 },
+      { "id": "fixture:reward:2", "xp": 20, "coins": 4, "at": 1736766000000 },
+      { "id": "fixture:reward:3", "xp": 15, "coins": 3, "at": 1736856000000 }
+    ],
+    "history": [
+      { "date": "2025-01-13", "bank": "core2000", "learned": 3, "reviewed": 2, "xp": 30 },
+      { "date": "2025-01-14", "bank": "core2000", "learned": 1, "reviewed": 3, "xp": 40 }
+    ],
+    "today": {
+      "date": "2025-01-15",
+      "bank": "core2000",
+      "goal": 5,
+      "practiceMode": "mixed",
+      "sprint": null,
+      "coreBatchId": "fixture-set",
+      "coreExerciseId": "fixture-exercise",
+      "newIds": ["core2000-fixture-03"],
+      "carryoverIds": [],
+      "learnedIds": [],
+      "practicedIds": [],
+      "dueIds": ["core2000-fixture-01", "ket-fixture-01"],
+      "baselineDueIds": ["core2000-fixture-01", "ket-fixture-01"],
+      "reviewDoneIds": [],
+      "studyCursor": 0,
+      "tasks": [
+        {
+          "id": "fixture-task-1",
+          "wordId": "core2000-fixture-01",
+          "source": "review",
+          "mode": "full",
+          "status": "queued",
+          "attempts": 0,
+          "hadLapse": false,
+          "assisted": false,
+          "nearMissUsed": false,
+          "cleanPass": false
+        }
+      ],
+      "goalAwarded": false,
+      "completed": false,
+      "sessionXp": 0,
+      "sessionCorrect": 0,
+      "sessionMistakes": 0
+    }
+  }
+}
