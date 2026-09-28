@@ -39,6 +39,8 @@ python3 -m unittest tests/test_launcher.py
 
 Source and image attribution details are recorded in [`SOURCES.md`](SOURCES.md).
 
-## Kevin's learning record
+## Learning-record privacy
 
-The latest portable learning record is kept in [`learning-records/`](learning-records/). Download it and use **从记录文件恢复** in the website settings to continue from the saved progress on another computer.
+Portable `*.wordquest.json` files contain personal learning history and must stay outside this public source repository. Keep them in a private or encrypted backup location. To continue on another computer, copy the newest record directly to that device and use **从记录文件恢复** in the website settings.
+
+Development and migration tests use anonymized fixtures only. See [`docs/learning-data-safety.md`](docs/learning-data-safety.md).

@@ -9,4 +9,5 @@ output/
 
 # Portable learning records are personal data and stay local
 *.wordquest.json
-!learning-records/*.wordquest.json
+learning-records/
+private-data/
