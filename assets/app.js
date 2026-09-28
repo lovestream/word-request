@@ -6,6 +6,7 @@
   const BACKUP_FORMAT = "kevin-word-quest-portable-record";
   const BACKUP_FORMAT_VERSION = 1;
   const DAY_MS = 86_400_000;
+  const WRITER_ID = window.crypto?.randomUUID?.() || `tab-${Date.now()}-${Math.random().toString(36).slice(2)}`;
   const SPRINT_SIZE = 30;
   const REVIEW_DELAYS = [
     { label: "10 分钟", ms: 10 * 60 * 1000, icon: "⏱" },
@@ -76,7 +77,8 @@
     bookQuery: "",
     practiceResult: null,
     practiceSource: null,
-    pk: null
+    pk: null,
+    storageConflict: false
   };
 
   function resetTransientRuntime() {
@@ -96,6 +98,9 @@
     return {
       schemaVersion: 1,
       savedAt: Date.now(),
+      updatedAt: Date.now(),
+      revision: 0,
+      writerId: "",
       profile: { name: "Kevin", avatar: "🦊" },
       settings: {
         bank: "ket",
@@ -127,11 +132,14 @@
         lastGoalDate: null
       },
       progress: {},
+      orphanProgress: {},
       coreExercises: {},
       badges: {},
       scoreLedger: [],
       today: null,
-      history: []
+      history: [],
+      dailyCompletion: {},
+      courseCompletion: {}
     };
   }
 
@@ -380,42 +388,62 @@
     return [...new Set(value.filter((id) => typeof id === "string" && Boolean(getWord(id))))];
   }
 
-  function sanitizeProgress(rawProgress) {
+  function sanitizeProgressItem(item) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) return null;
+    let status = ["learning", "reviewing", "mastered", "suspended"].includes(item.status) ? item.status : "learning";
+    let step = safeInteger(item.step, 0, 0, REVIEW_DELAYS.length);
+    let dueAt = item.dueAt == null ? null : finiteNumber(item.dueAt, null, 1, 9_999_999_999_999);
+    if (status === "mastered") {
+      step = REVIEW_DELAYS.length;
+      dueAt = null;
+    } else if (status === "reviewing" && dueAt == null) {
+      // A reviewing word without a due date can never re-enter either the
+      // learning queue or the review queue. Recover it as unfinished study.
+      status = "learning";
+      step = Math.min(step, REVIEW_DELAYS.length - 1);
+    } else if (status === "reviewing") {
+      step = Math.min(step, REVIEW_DELAYS.length - 1);
+    } else {
+      dueAt = null;
+    }
+    return {
+      status,
+      learnedAt: finiteNumber(item.learnedAt, Date.now(), 0, 9_999_999_999_999),
+      step,
+      scheduleToken: safeInteger(item.scheduleToken, 0, 0, 1_000_000),
+      lapses: safeInteger(item.lapses, 0),
+      correct: safeInteger(item.correct, 0),
+      dueAt,
+      lastSuccessAt: item.lastSuccessAt == null ? null : finiteNumber(item.lastSuccessAt, null, 0, 9_999_999_999_999),
+      initialModesDone: Array.isArray(item.initialModesDone)
+        ? [...new Set(item.initialModesDone.filter((mode) => mode === "cloze" || mode === "full"))]
+        : []
+    };
+  }
+
+  function sanitizeProgress(rawProgress, orphanSink = null) {
     const result = {};
     if (!rawProgress || typeof rawProgress !== "object" || Array.isArray(rawProgress)) return result;
     for (const [id, item] of Object.entries(rawProgress)) {
-      if (!getWord(id) || !item || typeof item !== "object" || Array.isArray(item)) continue;
-      let status = ["learning", "reviewing", "mastered", "suspended"].includes(item.status) ? item.status : "learning";
-      let step = safeInteger(item.step, 0, 0, REVIEW_DELAYS.length);
-      let dueAt = item.dueAt == null ? null : finiteNumber(item.dueAt, null, 1, 9_999_999_999_999);
-      if (status === "mastered") {
-        step = REVIEW_DELAYS.length;
-        dueAt = null;
-      } else if (status === "reviewing" && dueAt == null) {
-        // A reviewing word without a due date can never re-enter either the
-        // learning queue or the review queue. Recover it as unfinished study.
-        status = "learning";
-        step = Math.min(step, REVIEW_DELAYS.length - 1);
-      } else if (status === "reviewing") {
-        step = Math.min(step, REVIEW_DELAYS.length - 1);
-      } else {
-        dueAt = null;
+      const sanitized = sanitizeProgressItem(item);
+      if (!sanitized) continue;
+      if (!getWord(id)) {
+        if (orphanSink) orphanSink[id] = { ...sanitized, reason: "missing-card" };
+        continue;
       }
-      result[id] = {
-        status,
-        learnedAt: finiteNumber(item.learnedAt, Date.now(), 0, 9_999_999_999_999),
-        step,
-        scheduleToken: safeInteger(item.scheduleToken, 0, 0, 1_000_000),
-        lapses: safeInteger(item.lapses, 0),
-        correct: safeInteger(item.correct, 0),
-        dueAt,
-        lastSuccessAt: item.lastSuccessAt == null ? null : finiteNumber(item.lastSuccessAt, null, 0, 9_999_999_999_999),
-        initialModesDone: Array.isArray(item.initialModesDone)
-          ? [...new Set(item.initialModesDone.filter((mode) => mode === "cloze" || mode === "full"))]
-          : []
-      };
+      result[id] = sanitized;
     }
     return result;
+  }
+
+  function restoreOrphanProgress(rawOrphans, progress, orphanSink) {
+    if (!rawOrphans || typeof rawOrphans !== "object" || Array.isArray(rawOrphans)) return;
+    for (const [id, item] of Object.entries(rawOrphans)) {
+      const sanitized = sanitizeProgressItem(item);
+      if (!sanitized) continue;
+      if (getWord(id)) progress[id] = sanitized;
+      else orphanSink[id] = { ...sanitized, reason: safeText(item.reason, "missing-card", 80) };
+    }
   }
 
   function sanitizeCoreExercises(raw) {
@@ -595,6 +623,33 @@
     return progress;
   }
 
+  function sanitizeDailyCompletion(raw) {
+    const result = {};
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return result;
+    for (const [date, item] of Object.entries(raw)) {
+      if (!safeDateKey(date) || !item || typeof item !== "object" || Array.isArray(item)) continue;
+      result[date] = {
+        completedAt: finiteNumber(item.completedAt, Date.now(), 0, 9_999_999_999_999),
+        rewardEventId: safeText(item.rewardEventId, `daily:${date}`, 180)
+      };
+    }
+    return result;
+  }
+
+  function sanitizeCourseCompletion(raw) {
+    const result = {};
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return result;
+    for (const [setId, item] of Object.entries(raw)) {
+      if (!/^[a-z0-9:_-]{1,180}$/i.test(setId) || !item || typeof item !== "object" || Array.isArray(item)) continue;
+      result[setId] = {
+        completedAt: finiteNumber(item.completedAt, Date.now(), 0, 9_999_999_999_999),
+        date: safeDateKey(item.date),
+        exerciseId: safeText(item.exerciseId, "", 180)
+      };
+    }
+    return result;
+  }
+
   function mergeState(raw, strict = false) {
     const fresh = defaultState();
     if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
@@ -664,18 +719,26 @@
       .filter((item) => item && typeof item === "object" && safeDateKey(item.date))
       .slice(-120)
       .map((item) => ({ date: item.date, bank: safeBank(item.bank, settings.bank), learned: safeInteger(item.learned, 0), reviewed: safeInteger(item.reviewed, 0), xp: safeInteger(item.xp, 0) })) : [];
-    const progress = restoreInitialModesFromLedger(sanitizeProgress(raw.progress), scoreLedger);
+    const orphanProgress = {};
+    const progress = restoreInitialModesFromLedger(sanitizeProgress(raw.progress, orphanProgress), scoreLedger);
+    restoreOrphanProgress(raw.orphanProgress, progress, orphanProgress);
     return {
       schemaVersion: 1,
       savedAt: finiteNumber(raw.savedAt, Date.now(), 0, 9_999_999_999_999),
+      updatedAt: finiteNumber(raw.updatedAt, raw.savedAt || Date.now(), 0, 9_999_999_999_999),
+      revision: safeInteger(raw.revision, 0, 0, 1_000_000_000),
+      writerId: safeText(raw.writerId, "", 180),
       profile: { name: "Kevin", avatar: "🦊" },
       settings,
       stats,
       progress,
+      orphanProgress,
       coreExercises: sanitizeCoreExercises(raw.coreExercises),
       badges,
       scoreLedger,
       history,
+      dailyCompletion: sanitizeDailyCompletion(raw.dailyCompletion),
+      courseCompletion: sanitizeCourseCompletion(raw.courseCompletion),
       today: sanitizeToday(raw.today, settings, progress)
     };
   }
@@ -699,17 +762,49 @@
     return defaultState();
   }
 
+  function shouldRejectStaleWrite(localState, storedState, writerId = WRITER_ID) {
+    if (!storedState || typeof storedState !== "object" || Array.isArray(storedState)) return false;
+    const localRevision = safeInteger(localState?.revision, 0, 0, 1_000_000_000);
+    const storedRevision = safeInteger(storedState.revision, 0, 0, 1_000_000_000);
+    const storedWriter = safeText(storedState.writerId, "", 180);
+    return storedRevision > localRevision && Boolean(storedWriter) && storedWriter !== writerId;
+  }
+
   function saveState() {
-    state.savedAt = Date.now();
     try {
       const previous = localStorage.getItem(STATE_KEY);
+      let storedState = null;
+      if (previous) {
+        try {
+          storedState = JSON.parse(previous);
+        } catch (error) {
+          console.warn("当前主记录无法解析，将保留备份并写入已验证状态", error);
+        }
+      }
+      if (shouldRejectStaleWrite(state, storedState)) {
+        runtime.storageConflict = true;
+        toast("另一个标签页刚刚保存了更新记录；本页已停止写入，请刷新后继续", "⚠️");
+        updateChrome();
+        return false;
+      }
+      const now = Date.now();
+      state.revision = Math.max(
+        safeInteger(state.revision, 0, 0, 1_000_000_000),
+        safeInteger(storedState?.revision, 0, 0, 1_000_000_000)
+      ) + 1;
+      state.writerId = WRITER_ID;
+      state.updatedAt = now;
+      state.savedAt = now;
+      runtime.storageConflict = false;
       if (previous) localStorage.setItem(BACKUP_KEY, previous);
       localStorage.setItem(STATE_KEY, JSON.stringify(state));
     } catch (error) {
       console.error("保存学习记录失败", error);
       toast("浏览器空间不足，学习记录暂未保存", "⚠️");
+      return false;
     }
     updateChrome();
+    return true;
   }
 
   function localDateKey(date = new Date()) {
@@ -738,6 +833,49 @@
     const [fy, fm, fd] = fromKey.split("-").map(Number);
     const [ty, tm, td] = toKey.split("-").map(Number);
     return Math.round((Date.UTC(ty, tm - 1, td) - Date.UTC(fy, fm - 1, fd)) / DAY_MS);
+  }
+
+  function dailyCompletionExists(targetState, date) {
+    if (!safeDateKey(date)) return false;
+    return Boolean(
+      targetState.dailyCompletion?.[date]
+      || targetState.stats?.lastGoalDate === date
+      || targetState.scoreLedger?.some((event) => event?.id === `daily:${date}`)
+    );
+  }
+
+  function recordCompletionState(targetState, day, completedAt, isNewDailyCompletion) {
+    targetState.dailyCompletion ||= {};
+    targetState.courseCompletion ||= {};
+    if (day.coreBatchId) {
+      targetState.courseCompletion[day.coreBatchId] = {
+        completedAt,
+        date: day.date,
+        exerciseId: day.coreExerciseId || ""
+      };
+    }
+    if (!targetState.dailyCompletion[day.date]) {
+      targetState.dailyCompletion[day.date] = {
+        completedAt,
+        rewardEventId: `daily:${day.date}`
+      };
+    }
+    if (!isNewDailyCompletion) return false;
+
+    const previous = targetState.stats.lastGoalDate;
+    const distance = dayDistance(previous, day.date);
+    targetState.stats.streak = distance === 1 ? targetState.stats.streak + 1 : 1;
+    targetState.stats.bestStreak = Math.max(targetState.stats.bestStreak, targetState.stats.streak);
+    targetState.stats.lastGoalDate = day.date;
+    targetState.history.push({
+      date: day.date,
+      bank: day.bank,
+      learned: day.practicedIds.length,
+      reviewed: day.reviewDoneIds.length,
+      xp: day.sessionXp
+    });
+    targetState.history = targetState.history.slice(-120);
+    return true;
   }
 
   function hashString(value) {
@@ -1469,23 +1607,11 @@
 
     day.goalAwarded = true;
     day.completed = true;
-    award(`daily:${day.date}`, 50, 30, isCoreDay(day) ? "Today's English quest is complete" : "今日探险完成");
-
-    const previous = state.stats.lastGoalDate;
-    if (previous !== day.date) {
-      const distance = dayDistance(previous, day.date);
-      state.stats.streak = distance === 1 ? state.stats.streak + 1 : 1;
-      state.stats.bestStreak = Math.max(state.stats.bestStreak, state.stats.streak);
-      state.stats.lastGoalDate = day.date;
+    const isNewDailyCompletion = !dailyCompletionExists(state, day.date);
+    if (isNewDailyCompletion) {
+      award(`daily:${day.date}`, 50, 30, isCoreDay(day) ? "Today's English quest is complete" : "今日探险完成");
     }
-    state.history.push({
-      date: day.date,
-      bank: day.bank,
-      learned: day.practicedIds.length,
-      reviewed: day.reviewDoneIds.length,
-      xp: day.sessionXp
-    });
-    state.history = state.history.slice(-120);
+    recordCompletionState(state, day, Date.now(), isNewDailyCompletion);
     evaluateBadges();
     confetti();
     return true;
@@ -2587,6 +2713,8 @@
                 <ol class="record-transfer-steps"><li><b>1</b><span>在刚练习完的 Mac 上保存记录文件</span></li><li><b>2</b><span>用 AirDrop、U 盘或 iCloud 拷到另一台 Mac</span></li><li><b>3</b><span>在另一台 Mac 打开网站并从文件恢复</span></li></ol>
                 <div class="record-transfer-actions"><button class="btn btn-primary" type="button" data-action="export-data">保存学习记录文件</button><button class="btn btn-soft" type="button" data-action="import-data">从记录文件恢复</button></div>
                 <p class="record-transfer-note">请使用最新保存的文件；恢复会用文件里的完整进度替换当前浏览器记录。文件不包含密码或账号信息。</p>
+                ${runtime.storageConflict ? `<p class="record-transfer-note" role="alert">⚠️ 另一个标签页已有更新。本页不会继续覆盖记录，请刷新后再练习。</p>` : ""}
+                ${Object.keys(state.orphanProgress || {}).length ? `<p class="record-transfer-note" role="status">🧰 有 ${Object.keys(state.orphanProgress).length} 条暂时找不到词卡的历史已安全隔离，没有被删除。</p>` : ""}
               </div>
               <button class="btn btn-small" type="button" data-action="reset-data" style="margin-top:12px;color:var(--coral-deep);background:transparent">清空全部记录</button>
               <input id="importFile" type="file" accept=".json,.wordquest,application/json" hidden />
@@ -3506,6 +3634,19 @@
     route = ["home", "learn", "practice", "review", "books", "pk", "settings"].includes(requested) ? requested : "home";
     render();
   });
+  window.addEventListener("storage", (event) => {
+    if (event.key !== STATE_KEY || !event.newValue) return;
+    try {
+      const incoming = JSON.parse(event.newValue);
+      if (shouldRejectStaleWrite(state, incoming)) {
+        runtime.storageConflict = true;
+        toast("另一个标签页更新了学习记录；请刷新本页后继续", "⚠️");
+        render();
+      }
+    } catch (error) {
+      console.warn("忽略无法解析的跨标签记录通知", error);
+    }
+  });
   window.addEventListener("pagehide", saveState);
 
   window.WordQuestTest = {
@@ -3523,9 +3664,13 @@
     canEnterPracticeAnswer,
     differingLetterIndices,
     dayDistance,
+    dailyCompletionExists,
+    recordCompletionState,
     sanitizeProgress,
+    sanitizeProgressItem,
     sanitizeToday,
     mergeState,
+    shouldRejectStaleWrite,
     taskHasStarted,
     restoreInitialModesFromLedger,
     normalizeDailyGoal,

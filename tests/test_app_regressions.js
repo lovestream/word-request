@@ -321,6 +321,92 @@ const mergedNew = api.mergeState(duplicateNewBackup, true);
 assert.equal(mergedNew.today.tasks.length, 1);
 assert.equal(mergedNew.today.tasks[0].status, "done", "the most complete duplicate task must win");
 
+const orphaned = api.mergeState({
+  ...baseBackup,
+  progress: {
+    "future-bank:missing-card": {
+      status: "reviewing",
+      learnedAt: 10,
+      step: 2,
+      scheduleToken: 3,
+      lapses: 1,
+      correct: 3,
+      dueAt: Date.now() - 1000
+    }
+  },
+  today: null
+}, true);
+assert.equal(Object.keys(orphaned.progress).length, 0);
+assert.equal(orphaned.orphanProgress["future-bank:missing-card"].status, "reviewing");
+assert.equal(orphaned.orphanProgress["future-bank:missing-card"].reason, "missing-card");
+
+const rehydrated = api.mergeState({
+  ...baseBackup,
+  progress: {},
+  orphanProgress: {
+    "ket:test": {
+      status: "reviewing",
+      learnedAt: 10,
+      step: 1,
+      scheduleToken: 2,
+      dueAt: Date.now() + 1000
+    }
+  },
+  today: null
+}, true);
+assert.equal(rehydrated.progress["ket:test"].status, "reviewing", "a restored word bank must recover quarantined progress");
+assert.equal(Object.keys(rehydrated.orphanProgress).length, 0);
+
+assert.equal(api.shouldRejectStaleWrite(
+  { revision: 5 },
+  { revision: 6, writerId: "another-tab" },
+  "this-tab"
+), true, "a stale tab must not silently overwrite a newer revision");
+assert.equal(api.shouldRejectStaleWrite(
+  { revision: 6 },
+  { revision: 6, writerId: "another-tab" },
+  "this-tab"
+), false);
+assert.equal(api.shouldRejectStaleWrite(
+  { revision: 5 },
+  { revision: 6, writerId: "this-tab" },
+  "this-tab"
+), false, "the current writer may continue its own revision chain");
+
+const completionState = {
+  stats: { streak: 3, bestStreak: 3, lastGoalDate: "2026-07-26" },
+  scoreLedger: [],
+  dailyCompletion: {},
+  courseCompletion: {},
+  history: []
+};
+const firstSetDay = {
+  date: "2026-07-27",
+  bank: "core2000",
+  coreBatchId: "core2000-b1-u01-a",
+  coreExerciseId: "core2000-b1-u01-a-exercise",
+  practicedIds: ["core2000:test"],
+  reviewDoneIds: [],
+  sessionXp: 75
+};
+assert.equal(api.dailyCompletionExists(completionState, firstSetDay.date), false);
+assert.equal(api.recordCompletionState(completionState, firstSetDay, 1000, true), true);
+assert.equal(completionState.stats.streak, 4);
+assert.equal(completionState.history.length, 1);
+assert.ok(completionState.courseCompletion["core2000-b1-u01-a"]);
+
+const secondSetDay = {
+  ...firstSetDay,
+  coreBatchId: "core2000-b1-u01-b",
+  coreExerciseId: "core2000-b1-u01-b-exercise",
+  sessionXp: 40
+};
+assert.equal(api.dailyCompletionExists(completionState, secondSetDay.date), true);
+assert.equal(api.recordCompletionState(completionState, secondSetDay, 2000, false), false);
+assert.equal(completionState.stats.streak, 4, "a second set on the same day must not reset or increase the streak");
+assert.equal(completionState.history.length, 1, "daily goal history must have one row per completed date");
+assert.ok(completionState.courseCompletion["core2000-b1-u01-b"], "both course sets must remain recorded");
+
 assert.throws(
   () => api.mergeState({ schemaVersion: 1, settings: [], stats: [], progress: [] }, true),
   /必要字段/
