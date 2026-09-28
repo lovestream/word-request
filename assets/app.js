@@ -177,6 +177,12 @@
     return window.CORE2000_COURSE || { books: [], batches: [], words: [] };
   }
 
+  function canonicalWordId(id) {
+    if (typeof id !== "string") return id;
+    const alias = coreCourse().idAliases?.[id];
+    return typeof alias === "string" && alias ? alias : id;
+  }
+
   function coreBatchInfo(value = state?.settings?.coreBatch || 1) {
     const batches = coreCourse().batches || [];
     const sequence = safeInteger(value, 1, 1, Math.max(1, batches.length));
@@ -387,7 +393,10 @@
 
   function safeWordIds(value) {
     if (!Array.isArray(value)) return [];
-    return [...new Set(value.filter((id) => typeof id === "string" && Boolean(getWord(id))))];
+    return [...new Set(value
+      .filter((id) => typeof id === "string")
+      .map(canonicalWordId)
+      .filter((id) => Boolean(getWord(id))))];
   }
 
   function sanitizeProgressItem(item) {
@@ -429,11 +438,24 @@
     for (const [id, item] of Object.entries(rawProgress)) {
       const sanitized = sanitizeProgressItem(item);
       if (!sanitized) continue;
-      if (!getWord(id)) {
+      const canonicalId = canonicalWordId(id);
+      if (!getWord(canonicalId)) {
         if (orphanSink) orphanSink[id] = { ...sanitized, reason: "missing-card" };
         continue;
       }
-      result[id] = sanitized;
+      const existing = result[canonicalId];
+      if (!existing) result[canonicalId] = sanitized;
+      else {
+        const newer = (sanitized.lastSuccessAt || sanitized.learnedAt) >= (existing.lastSuccessAt || existing.learnedAt) ? sanitized : existing;
+        result[canonicalId] = {
+          ...newer,
+          learnedAt: Math.min(existing.learnedAt, sanitized.learnedAt),
+          scheduleToken: Math.max(existing.scheduleToken, sanitized.scheduleToken),
+          lapses: Math.max(existing.lapses, sanitized.lapses),
+          correct: Math.max(existing.correct, sanitized.correct),
+          initialModesDone: [...new Set([...existing.initialModesDone, ...sanitized.initialModesDone])]
+        };
+      }
     }
     return result;
   }
@@ -443,7 +465,8 @@
     for (const [id, item] of Object.entries(rawOrphans)) {
       const sanitized = sanitizeProgressItem(item);
       if (!sanitized) continue;
-      if (getWord(id)) progress[id] = sanitized;
+      const canonicalId = canonicalWordId(id);
+      if (getWord(canonicalId)) progress[canonicalId] = sanitized;
       else orphanSink[id] = { ...sanitized, reason: safeText(item.reason, "missing-card", 80) };
     }
   }
@@ -479,7 +502,8 @@
     if (!item || typeof item !== "object" || Array.isArray(item) || !getWord(item.wordId)) return null;
     const id = typeof item.id === "string" && /^[a-z0-9:_-]{1,220}$/i.test(item.id) ? item.id : null;
     if (!id) return null;
-    const actualWord = getWord(item.wordId);
+    const wordId = canonicalWordId(item.wordId);
+    const actualWord = getWord(wordId);
     const feedbackType = item.feedback?.type === "correct" ? "correct" : item.feedback?.type === "wrong" ? "wrong" : null;
     const feedback = feedbackType ? {
       type: feedbackType,
@@ -488,7 +512,7 @@
     } : null;
     return {
       id,
-      wordId: item.wordId,
+      wordId,
       source: item.source === "review" ? "review" : item.source === "sprint" ? "sprint" : "new",
       mode: item.mode === "full" ? "full" : "cloze",
       status: ["queued", "passed", "done"].includes(item.status) ? item.status : "queued",
@@ -928,7 +952,7 @@
   }
 
   function getWord(id) {
-    return wordIndex().get(id);
+    return wordIndex().get(canonicalWordId(id));
   }
 
   function moversSequenceValue(word) {
@@ -2294,6 +2318,7 @@
     const index = day.newIds.indexOf(word.id);
     const alreadyLearned = day.learnedIds.includes(word.id);
     const breakdownClass = runtime.breakdownOpen ? "" : "is-collapsed";
+    const verifiedSoundChunks = word.breakdown?.type !== "spelling chunks";
     const studyDefinition = studyDefinitionFor(word);
     const englishMeaning = (coreEnglish || state.settings.showEnglish) ? `<div class="meaning-audio-row"><p class="english-meaning">${escapeHtml(studyDefinition)}</p><button class="meaning-sound" type="button" data-action="speak" data-say="${escapeHtml(studyDefinition)}" data-rate="0.74" aria-label="${coreEnglish ? `Hear the definition: ${escapeHtml(studyDefinition)}` : "播放英文释义"}" title="${coreEnglish ? "Hear the definition" : "播放英文释义"}">▶</button></div>` : "";
     const sessionTag = day.practiceMode === "sprint"
@@ -2328,12 +2353,12 @@
             <div class="meaning-block">${englishMeaning}${coreEnglish ? "" : `<p class="chinese-meaning">${escapeHtml(word.zh)}</p>`}</div>
 
             <div class="breakdown-wrap ${breakdownClass}">
-              <p class="section-label"><span>${escapeHtml(word.breakdown.label)}</span><span>${coreEnglish ? "Tap each chunk to hear it" : "点每一块听读音"}</span></p>
+              <p class="section-label"><span>${escapeHtml(word.breakdown.label)}</span><span>${verifiedSoundChunks ? (coreEnglish ? "Tap each checked sound chunk to hear it" : "点每一块听读音") : (coreEnglish ? "Visual spelling groups — not pronunciation units" : "仅帮助看清拼写，不代表音节或词根")}</span></p>
               <div class="breakdown-parts">
-                ${word.breakdown.parts.map((part) => `<span class="word-part"><button class="part-sound" type="button" data-action="speak" data-say="${escapeHtml(part.text)}" title="${escapeHtml(part.say)}">${escapeHtml(part.text)}</button><span class="part-meaning">${escapeHtml(part.meaning)}</span></span>`).join("")}
+                ${word.breakdown.parts.map((part) => `<span class="word-part">${verifiedSoundChunks ? `<button class="part-sound" type="button" data-action="speak" data-say="${escapeHtml(part.say || part.text)}" title="${escapeHtml(part.say || part.text)}">${escapeHtml(part.text)}</button>` : `<span class="part-sound is-static">${escapeHtml(part.text)}</span>`}${part.meaning ? `<span class="part-meaning">${escapeHtml(part.meaning)}</span>` : ""}</span>`).join("")}
               </div>
             </div>
-            ${runtime.breakdownOpen ? "" : `<button class="breakdown-hint" type="button" data-action="toggle-breakdown">${coreEnglish ? "Tap the word to open its sound chunks" : "点一下单词，把它拆成记忆积木"} <span>↓</span></button>`}
+            ${runtime.breakdownOpen ? "" : `<button class="breakdown-hint" type="button" data-action="toggle-breakdown">${coreEnglish ? "Tap the word to open its spelling groups" : "点一下单词，把它拆成记忆积木"} <span>↓</span></button>`}
 
             ${word.example ? `<div class="example-card"><div class="example-copy"><p>${escapeHtml(word.example)}</p>${word.exampleZh ? `<small>${escapeHtml(word.exampleZh)}</small>` : ""}</div><button class="example-sound" type="button" data-action="speak" data-say="${escapeHtml(word.example)}" data-rate="0.76" aria-label="${coreEnglish ? `Hear the example sentence: ${escapeHtml(word.example)}` : "播放例句发音"}" title="${coreEnglish ? "Hear the example sentence" : "播放例句发音"}">▶</button></div>` : ""}
             <div class="memory-tip"><span>💡</span><span><strong>${coreEnglish ? "Memory hook: " : "Kevin 的记忆钩："}</strong>${escapeHtml(word.tip)}</span></div>
@@ -3781,6 +3806,7 @@
     hashString,
     seededShuffle,
     normalizeAnswer,
+    canonicalWordId,
     selectAmericanVoice,
     buildStudySpeechSequence,
     spellingVariants,

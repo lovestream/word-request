@@ -1475,6 +1475,10 @@ button:disabled {
   font-size: 11px;
 }
 
+.part-sound.is-static::after {
+  content: "·";
+}
+
 .part-meaning {
   display: flex;
   align-items: center;

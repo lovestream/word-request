@@ -38,7 +38,8 @@ const coreWord = {
 
 const windowStub = {
   CORE2000_COURSE: {
-    batches: [{ exercise: { id: "core2000-b1-u01-a-exercise" } }]
+    batches: [{ exercise: { id: "core2000-b1-u01-a-exercise" } }],
+    idAliases: { "core2000:old-memory": "core2000:test" }
   },
   CORE2000_EXERCISE_ANSWERS: {
     "core2000-b1-u01-a-exercise": ["a", "a", "d", "b", "c", "ease", "dentist", "finger", "body", "healthy"]
@@ -97,6 +98,12 @@ vm.runInNewContext(
 
 const api = windowStub.WordQuestTest;
 assert.ok(api, "app regression API should be available");
+assert.equal(api.canonicalWordId("core2000:old-memory"), "core2000:test");
+const aliasedProgress = api.sanitizeProgress({
+  "core2000:old-memory": { status: "reviewing", learnedAt: 10, step: 1, scheduleToken: 2, dueAt: 20, correct: 3 }
+});
+assert.equal(aliasedProgress["core2000:test"].correct, 3, "a renamed card must keep its learning progress");
+assert.equal("core2000:old-memory" in aliasedProgress, false);
 
 assert.equal(api.studyDefinitionFor({ word: "blood", en: "Blood is the red liquid in your body." }), "Blood is the red liquid in your body.");
 assert.equal(api.quizClueFor({ word: "blood", quizClue: "Blood is the red liquid in your body." }), "", "a clue containing the answer must be rejected");

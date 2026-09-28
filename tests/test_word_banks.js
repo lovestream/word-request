@@ -59,11 +59,26 @@ for (const item of [...window.WORD_BANKS.ket, ...window.WORD_BANKS.pet, ...windo
 }
 
 const coreWords = window.WORD_BANKS.core2000;
+const correctedTail = coreWords.find((item) => item.id === "core2000-b3-u16-b-05-tail");
+assert.ok(correctedTail, "the verified tail card must replace the OCR fail card");
+assert.equal(correctedTail.word, "tail");
+assert.match(correctedTail.en, /^A tail is /);
+assert.equal(correctedTail.ipa, "/teɪl/");
+assert.equal(window.CORE2000_COURSE.idAliases["core2000-b3-u16-b-05-fail"], correctedTail.id);
+assert.ok(!coreWords.some((item) => item.id === "core2000-b3-u16-b-05-fail"));
+const correctedTire = coreWords.find((item) => item.id === "core2000-b2-u02-b-06-tire");
+assert.match(correctedTire.en, /^A tire is /);
+assert.equal(correctedTire.ipa, "/taɪr/");
+assert.equal(coreWords.find((item) => item.word === "girlfriend").ipa, "/ˈɡɝːlfrend/");
+assert.equal(coreWords.find((item) => item.word === "website").ipa, "/ˈwebsaɪt/");
 for (const item of coreWords) {
   assert.equal(item.englishOnly, true);
   assert.equal(item.zh, "");
   assert.equal(item.exampleZh, "");
   assert.ok(item.word && item.en && item.example && item.visual?.image && item.breakdown?.parts?.length, item.id);
+  assert.equal(item.breakdown.type, "spelling chunks", item.id);
+  assert.equal(item.breakdown.label, "SPELLING CHUNKS", item.id);
+  assert.ok(item.breakdown.parts.every((part) => part.text && !part.say && !part.meaning), item.id);
   assert.ok(fs.existsSync(path.join(__dirname, "..", item.visual.image)), item.visual.image);
 }
 for (const [index, batch] of window.CORE2000_COURSE.batches.entries()) {

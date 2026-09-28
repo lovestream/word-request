@@ -19,8 +19,11 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
-from PIL import Image, ImageOps
-from pypdf import PdfReader
+try:
+    from PIL import Image, ImageOps
+    from pypdf import PdfReader
+except ModuleNotFoundError:
+    Image = ImageOps = PdfReader = None
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -55,6 +58,26 @@ BOOKS = (
 POS_RE = re.compile(r"^(n|v|adj|adv|prep|conj|pron|det|excl|num)\.\s*", re.I)
 HEAD_RE = re.compile(r"^(.+?)\s*[\[\(\{]([^\]\)\}]*)[\]\)\}]", re.I)
 WORD_RE = re.compile(r"^[a-z][a-z' -]*$", re.I)
+
+CORE_SOURCE_CORRECTIONS = {
+    (2, 2, "b", 6): {
+        "definition": "A tire is a rubber ring filled with air that goes around a wheel.",
+        "ipa": "/taɪr/",
+    },
+    (3, 16, "b", 5): {
+        "word": "tail",
+        "ipa": "/teɪl/",
+        "definition": "A tail is a part at the back of an animal's body that can move.",
+        "example": "Our dog wags his tail when he's happy.",
+    },
+}
+IPA_OVERRIDES = {
+    "girlfriend": "/ˈɡɝːlfrend/",
+    "website": "/ˈwebsaɪt/",
+}
+LEGACY_ID_ALIASES = {
+    "core2000-b3-u16-b-05-fail": "core2000-b3-u16-b-05-tail",
+}
 
 
 def load_dictionary() -> dict[str, dict[str, str]]:
@@ -301,7 +324,7 @@ def parse_theme(page: dict, unit: int) -> str:
     return f"Unit {unit}"
 
 
-def sound_chunks(word: str) -> list[str]:
+def spelling_chunks(word: str) -> list[str]:
     if " " in word:
         return word.split()
     vowels = "aeiouy"
@@ -313,6 +336,41 @@ def sound_chunks(word: str) -> list[str]:
             start = index
     chunks.append(word[start:])
     return [chunk for chunk in chunks if chunk]
+
+
+def apply_course_corrections(data: dict) -> dict:
+    """Apply verified source fixes and presentation metadata after every build."""
+    words = data.get("words", [])
+    for word in words:
+        old_id = word.get("id")
+        if old_id == "core2000-b2-u02-b-06-tire":
+            word["en"] = CORE_SOURCE_CORRECTIONS[(2, 2, "b", 6)]["definition"]
+            word["ipa"] = CORE_SOURCE_CORRECTIONS[(2, 2, "b", 6)]["ipa"]
+        elif old_id == "core2000-b3-u16-b-05-fail":
+            fix = CORE_SOURCE_CORRECTIONS[(3, 16, "b", 5)]
+            word.update({
+                "id": LEGACY_ID_ALIASES[old_id],
+                "word": fix["word"],
+                "ipa": fix["ipa"],
+                "en": fix["definition"],
+                "example": fix["example"],
+                "legacyIds": [old_id],
+            })
+            word.setdefault("visual", {})["alt"] = "Book illustration for tail"
+            word["tip"] = "Look at the book picture, say “tail,” and read the example aloud."
+        if word.get("word") in IPA_OVERRIDES:
+            word["ipa"] = IPA_OVERRIDES[word["word"]]
+        chunks = spelling_chunks(word.get("word", ""))
+        word["breakdown"] = {
+            "type": "spelling chunks",
+            "label": "SPELLING CHUNKS",
+            "parts": [{"text": chunk} for chunk in chunks],
+        }
+
+    for batch in data.get("batches", []):
+        batch["wordIds"] = [LEGACY_ID_ALIASES.get(word_id, word_id) for word_id in batch.get("wordIds", [])]
+    data["idAliases"] = dict(LEGACY_ID_ALIASES)
+    return data
 
 
 def build_data(manifest: list[dict]) -> dict:
@@ -330,13 +388,16 @@ def build_data(manifest: list[dict]) -> dict:
         word_ids = []
         for row in range(10):
             parsed = parse_row(page, row)
+            parsed.update(CORE_SOURCE_CORRECTIONS.get((item["book"], item["unit"], item["half"], row + 1), {}))
+            if parsed["word"] in IPA_OVERRIDES:
+                parsed["ipa"] = IPA_OVERRIDES[parsed["word"]]
             slug = re.sub(r"[^a-z0-9]+", "-", parsed["word"]).strip("-")
             word_id = f"core2000-b{item['book']}-u{item['unit']:02d}-{item['half']}-{row + 1:02d}-{slug}"
             if word_id in seen_ids:
                 raise RuntimeError(f"Duplicate generated id: {word_id}")
             seen_ids.add(word_id)
             word_ids.append(word_id)
-            chunks = sound_chunks(parsed["word"])
+            chunks = spelling_chunks(parsed["word"])
             words.append({
                 "id": word_id,
                 "word": parsed["word"],
@@ -355,12 +416,9 @@ def build_data(manifest: list[dict]) -> dict:
                     "emoji": "📘",
                 },
                 "breakdown": {
-                    "type": "sound chunks",
-                    "label": "SOUND CHUNKS",
-                    "parts": [
-                        {"text": chunk, "say": chunk, "meaning": f"chunk {index + 1}"}
-                        for index, chunk in enumerate(chunks)
-                    ],
+                    "type": "spelling chunks",
+                    "label": "SPELLING CHUNKS",
+                    "parts": [{"text": chunk} for chunk in chunks],
                 },
                 "tip": f"Look at the book picture, say “{parsed['word']},” and read the example aloud.",
                 "example": parsed["example"],
@@ -396,7 +454,7 @@ def build_data(manifest: list[dict]) -> dict:
 
     if len(words) != 1280 or len(batches) != 128:
         raise RuntimeError(f"Expected 1280 words / 128 batches, got {len(words)} / {len(batches)}")
-    return {
+    return apply_course_corrections({
         "title": "2000 Core English Words",
         "edition": "Four-book course",
         "language": "en",
@@ -406,7 +464,7 @@ def build_data(manifest: list[dict]) -> dict:
             {"number": book.number, "title": f"Book {book.number}", "color": book.color, "batchStart": (book.number - 1) * 32 + 1, "batchEnd": book.number * 32}
             for book in BOOKS
         ],
-    }
+    })
 
 
 def write_outputs(data: dict) -> None:
@@ -428,7 +486,16 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--prepare-only", action="store_true")
     parser.add_argument("--skip-ocr", action="store_true")
+    parser.add_argument("--rewrite-existing", action="store_true", help="apply verified fixes to the checked-in JSON and regenerate JavaScript")
     args = parser.parse_args()
+
+    if args.rewrite_existing:
+        data = json.loads(DATA_OUTPUT.read_text(encoding="utf-8"))
+        write_outputs(apply_course_corrections(data))
+        print(f"Rewrote {len(data.get('words', []))} Core 2000 cards with verified corrections")
+        return
+    if Image is None or PdfReader is None:
+        raise SystemExit("Full PDF rebuild requires Pillow and pypdf; --rewrite-existing does not.")
 
     manifest_path = WORK / "manifest.json"
     if args.skip_ocr and manifest_path.exists():
