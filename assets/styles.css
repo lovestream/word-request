@@ -1826,6 +1826,12 @@ button:disabled {
   background: rgba(242, 111, 94, 0.1);
 }
 
+.feedback-definition {
+  display: block;
+  margin-top: 7px;
+  font-weight: 750;
+}
+
 .practice-actions {
   display: flex;
   flex-wrap: wrap;

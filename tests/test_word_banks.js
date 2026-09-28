@@ -40,6 +40,17 @@ assert.ok(!petSourceHeads.has("license)"));
 
 const all = Object.values(window.WORD_BANKS).flat();
 assert.equal(new Set(all.map((item) => item.id)).size, all.length);
+for (const item of all) {
+  if (!item.quizClue) continue;
+  const clue = item.quizClue.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+  const answerForms = [item.word, ...(item.acceptedAnswers || [])]
+    .map((answer) => answer.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim())
+    .filter(Boolean);
+  assert.ok(
+    answerForms.every((answer) => !(` ${clue} `).includes(` ${answer} `)),
+    `quiz clue leaks an accepted spelling: ${item.id}`
+  );
+}
 for (const item of [...window.WORD_BANKS.ket, ...window.WORD_BANKS.pet, ...window.WORD_BANKS.movers]) {
   const forms = [item.word, ...(item.acceptedAnswers || [])];
   assert.ok(forms.every((form) => !/[()]/.test(form)), item.officialHeadword);

@@ -98,6 +98,20 @@ vm.runInNewContext(
 const api = windowStub.WordQuestTest;
 assert.ok(api, "app regression API should be available");
 
+assert.equal(api.studyDefinitionFor({ word: "blood", en: "Blood is the red liquid in your body." }), "Blood is the red liquid in your body.");
+assert.equal(api.quizClueFor({ word: "blood", quizClue: "Blood is the red liquid in your body." }), "", "a clue containing the answer must be rejected");
+assert.equal(api.quizClueFor({ word: "truck", acceptedAnswers: ["lorry"], quizClue: "A large road vehicle for carrying goods." }), "A large road vehicle for carrying goods.");
+assert.equal(api.quizClueFor({ word: "truck", acceptedAnswers: ["lorry"], quizClue: "Another word for a lorry." }), "", "accepted answers must also stay out of quiz clues");
+assert.equal(api.quizClueFor({ word: "website", quizClue: "Websites can contain many pages." }), "", "common inflections must not reveal the target");
+
+const appSource = fs.readFileSync(path.join(__dirname, "..", "assets", "app.js"), "utf8");
+const practiceSource = appSource.slice(appSource.indexOf("function renderPractice()"), appSource.indexOf("function renderCoreExercise()"));
+const pkSource = appSource.slice(appSource.indexOf("function renderPkGame()"), appSource.indexOf("function submitPk()"));
+assert.doesNotMatch(practiceSource, /data-word=/, "pre-answer spelling DOM must not carry the complete answer");
+assert.doesNotMatch(practiceSource, /word\.en/, "original study definitions must never render as pre-answer clues");
+assert.doesNotMatch(pkSource, /word\.en/, "PK must not use an answer-bearing Core definition");
+assert.match(practiceSource, /aria-label="\$\{coreEnglish \? "Book picture clue" : "单词图片提示"\}"/);
+
 assert.deepEqual(
   Array.from(api.bankKeys),
   ["core2000", "movers", "ket", "pet"],

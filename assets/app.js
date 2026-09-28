@@ -1837,6 +1837,54 @@
     return String(value || "").normalize("NFKC").trim().toLowerCase().replaceAll("’", "'");
   }
 
+  function spellingVariants(word) {
+    const forms = new Set();
+    const normalized = normalizeAnswer(word).replace(/\s+/g, " ");
+    if (!normalized) return forms;
+    forms.add(normalized);
+    if (!/^[a-z]{3,}$/.test(normalized)) return forms;
+    forms.add(`${normalized}s`);
+    forms.add(`${normalized}ed`);
+    forms.add(`${normalized}ing`);
+    if (normalized.endsWith("e")) {
+      forms.add(`${normalized}d`);
+      forms.add(`${normalized.slice(0, -1)}ing`);
+    }
+    if (/[^aeiou]y$/.test(normalized)) {
+      forms.add(`${normalized.slice(0, -1)}ies`);
+      forms.add(`${normalized.slice(0, -1)}ied`);
+    }
+    if (/(?:s|x|z|ch|sh)$/.test(normalized)) forms.add(`${normalized}es`);
+    return forms;
+  }
+
+  function answerFormsFor(word) {
+    return [...new Set([word?.word, ...(Array.isArray(word?.acceptedAnswers) ? word.acceptedAnswers : [])]
+      .flatMap((form) => [...spellingVariants(form)]))];
+  }
+
+  function clueContainsAnswer(clue, word) {
+    const searchable = normalizeAnswer(clue).replace(/[^a-z0-9]+/g, " ").replace(/\s+/g, " ").trim();
+    if (!searchable) return false;
+    return answerFormsFor(word).some((form) => {
+      const target = form.replace(/[^a-z0-9]+/g, " ").replace(/\s+/g, " ").trim();
+      return target && (` ${searchable} `).includes(` ${target} `);
+    });
+  }
+
+  function studyDefinitionFor(word) {
+    return safeText(word?.studyDefinition || word?.en, "", 900);
+  }
+
+  function feedbackDefinitionFor(word) {
+    return safeText(word?.feedbackDefinition || studyDefinitionFor(word), "", 900);
+  }
+
+  function quizClueFor(word) {
+    const clue = safeText(word?.quizClue, "", 500);
+    return clue && !clueContainsAnswer(clue, word) ? clue : "";
+  }
+
   function normalizeExerciseAnswer(value) {
     return normalizeAnswer(value)
       .replace(/[‘’]/g, "'")
@@ -2246,7 +2294,8 @@
     const index = day.newIds.indexOf(word.id);
     const alreadyLearned = day.learnedIds.includes(word.id);
     const breakdownClass = runtime.breakdownOpen ? "" : "is-collapsed";
-    const englishMeaning = (coreEnglish || state.settings.showEnglish) ? `<div class="meaning-audio-row"><p class="english-meaning">${escapeHtml(word.en)}</p><button class="meaning-sound" type="button" data-action="speak" data-say="${escapeHtml(word.en)}" data-rate="0.74" aria-label="${coreEnglish ? `Hear the definition: ${escapeHtml(word.en)}` : "播放英文释义"}" title="${coreEnglish ? "Hear the definition" : "播放英文释义"}">▶</button></div>` : "";
+    const studyDefinition = studyDefinitionFor(word);
+    const englishMeaning = (coreEnglish || state.settings.showEnglish) ? `<div class="meaning-audio-row"><p class="english-meaning">${escapeHtml(studyDefinition)}</p><button class="meaning-sound" type="button" data-action="speak" data-say="${escapeHtml(studyDefinition)}" data-rate="0.74" aria-label="${coreEnglish ? `Hear the definition: ${escapeHtml(studyDefinition)}` : "播放英文释义"}" title="${coreEnglish ? "Hear the definition" : "播放英文释义"}">▶</button></div>` : "";
     const sessionTag = day.practiceMode === "sprint"
       ? `${BANK_META[day.bank]?.short || day.bank} · DAY ${day.sprint.day} · ${sprintRangeText(day.sprint)}`
       : BANK_META[day.bank]?.short || day.bank;
@@ -2273,7 +2322,7 @@
                 <button class="study-word word-trigger ${word.word.includes(" ") ? "is-phrase" : ""}" type="button" data-action="toggle-breakdown" aria-expanded="${runtime.breakdownOpen}">${escapeHtml(word.word)}</button>
                 <div class="ipa-row"><span>${escapeHtml(word.ipa || "/—/")}</span>${word.pos?.length ? `<span class="pos-pill">${escapeHtml(Array.isArray(word.pos) ? word.pos.join(" · ") : word.pos)}</span>` : ""}<small>· ${coreEnglish ? "American voice" : "美式语音"}</small></div>
               </div>
-              <button class="sound-button is-sequence" type="button" data-action="speak-sequence" data-word="${escapeHtml(word.word)}" data-definition="${escapeHtml(word.en)}" data-example="${escapeHtml(word.example || "")}" aria-label="${coreEnglish ? "Play the word, definition, and example" : "依次播放单词、英文释义和例句"}" title="${coreEnglish ? "Play word → definition → example" : "连读：单词 → 英文释义 → 例句"}"><span>▶</span><small>${coreEnglish ? "PLAY ALL" : "连读"}</small></button>
+              <button class="sound-button is-sequence" type="button" data-action="speak-sequence" data-word="${escapeHtml(word.word)}" data-definition="${escapeHtml(studyDefinition)}" data-example="${escapeHtml(word.example || "")}" aria-label="${coreEnglish ? "Play the word, definition, and example" : "依次播放单词、英文释义和例句"}" title="${coreEnglish ? "Play word → definition → example" : "连读：单词 → 英文释义 → 例句"}"><span>▶</span><small>${coreEnglish ? "PLAY ALL" : "连读"}</small></button>
             </div>
 
             <div class="meaning-block">${englishMeaning}${coreEnglish ? "" : `<p class="chinese-meaning">${escapeHtml(word.zh)}</p>`}</div>
@@ -2436,17 +2485,20 @@
       const isError = !isPassed && !isHinted && (task.errorIndices || []).includes(index);
       return `<input class="letter-cell ${isPassed || isHinted ? "is-success" : ""} ${isError ? "is-error" : ""}" type="text" inputmode="text" maxlength="1" autocomplete="off" autocapitalize="none" spellcheck="false" aria-label="${coreEnglish ? `Letter ${index + 1}` : `第 ${index + 1} 个字母`}" data-index="${index}" value="${value}" ${isError ? `aria-invalid="true"` : ""} ${isPassed || isHinted ? "disabled" : ""} />`;
     }).join("");
-    const englishClue = state.settings.showEnglish && !(task.source === "sprint" && task.sprintPhase === "final") ? `<span class="clue-chip">📖 ${escapeHtml(word.en)}</span>` : "";
+    const safeQuizClue = quizClueFor(word);
+    const englishClue = state.settings.showEnglish && safeQuizClue && !(task.source === "sprint" && task.sprintPhase === "final") ? `<span class="clue-chip">📖 ${escapeHtml(safeQuizClue)}</span>` : "";
     const progressWidth = totalTasks ? ((taskIndex - (isPassed ? 0 : 1)) / totalTasks) * 100 : 0;
     const lastInStage = scopedTasks.filter((item) => item.status !== "done").length === 1;
     const noHint = task.source === "sprint" && task.sprintPhase === "final";
     const practiceInstruction = coreEnglish
-      ? task.source === "review" ? "This word is due now. Recall it from the picture and strengthen the memory before it fades." : task.mode === "cloze" ? "Use the book picture and the visible letters. Fill every empty box." : "Use the picture and English definition. Spell the complete word."
+      ? task.source === "review" ? "This word is due now. Recall it from the picture and strengthen the memory before it fades." : task.mode === "cloze" ? "Use the book picture and the visible letters. Fill every empty box." : "Use the book picture and your memory. Spell the complete word."
       : noHint
       ? "只看图片与中文回忆单词；本题提交后才知道结果，首答必须准确。"
       : task.mode === "cloze"
         ? "看清已经留下的字母，把空格补完整。"
         : "所有字母都藏起来了，慢慢回想画面和声音。";
+    const answerRevealed = isPassed || Boolean(feedback?.word);
+    const feedbackDefinition = answerRevealed ? feedbackDefinitionFor(word) : "";
 
     return `
       <section class="view-page practice-shell">
@@ -2460,13 +2512,13 @@
         <article class="practice-card ${task.source === "sprint" ? "is-sprint" : ""} ${feedback?.type === "wrong" ? "is-wrong" : ""} ${isPassed ? "is-correct" : ""}">
           <span class="practice-mode-label ${task.source === "sprint" ? "is-sprint" : ""}">${task.mode === "cloze" ? "◐" : task.sprintPhase === "final" ? "🏁" : "●"} ${escapeHtml(sourceLabel)}</span>
           <div class="practice-content">
-            <div class="practice-picture ${word.visual?.image ? "has-source-image" : ""}" style="--visual-bg:${safeColor(word.visual.color1, "#61c5cf")}" role="img" aria-label="${escapeHtml(coreEnglish ? `Book picture for ${word.word}` : `${word.zh}的图片提示`)}">${compactPictureMarkup(word, "practice-source-image", "picture-emoji")}</div>
+            <div class="practice-picture ${word.visual?.image ? "has-source-image" : ""}" style="--visual-bg:${safeColor(word.visual.color1, "#61c5cf")}" role="img" aria-label="${coreEnglish ? "Book picture clue" : "单词图片提示"}">${compactPictureMarkup(word, "practice-source-image", "picture-emoji")}</div>
             <div class="practice-side">
               <h1>${escapeHtml(modeLabel)}</h1>
               <p>${escapeHtml(practiceInstruction)}</p>
-              <div class="letter-board" id="letterBoard" data-word="${escapeHtml(word.word)}">${letters}</div>
-              <div class="practice-clues">${coreEnglish ? "" : `<span class="clue-chip">🇨🇳 ${escapeHtml(word.zh)}</span>`}${englishClue}${noHint ? "" : `<button class="clue-chip" type="button" data-action="speak" data-say="${escapeHtml(word.word)}">🔊 ${coreEnglish ? "Hear the word" : "听读音"}</button>`}</div>
-              ${feedback ? `<div class="feedback-box is-visible ${feedback.type}" aria-live="polite">${feedbackMarkup(feedback)}</div>` : `<div class="feedback-box" id="practiceFeedback" aria-live="polite"></div>`}
+              <div class="letter-board" id="letterBoard">${letters}</div>
+              <div class="practice-clues">${coreEnglish ? "" : `<span class="clue-chip">🇨🇳 ${escapeHtml(word.zh)}</span>`}${englishClue}${noHint ? "" : `<button class="clue-chip" type="button" data-action="speak-practice-word">🔊 ${coreEnglish ? "Hear word · hint" : "听单词（算提示）"}</button>`}</div>
+              ${feedback ? `<div class="feedback-box is-visible ${feedback.type}" aria-live="polite">${feedbackMarkup(feedback)}${feedbackDefinition ? `<span class="feedback-definition">${escapeHtml(feedbackDefinition)}</span>` : ""}</div>` : `<div class="feedback-box" id="practiceFeedback" aria-live="polite"></div>`}
               <div class="practice-actions">
                 ${isPassed ? `<button class="btn btn-primary" type="button" data-action="advance-practice">${task.source === "new" && !task.cleanPass ? coreEnglish ? "Restart this word →" : "从补空重新练习 →" : coreEnglish ? task.source === "review" ? "Next review →" : "Next word →" : task.source === "sprint" && lastInStage ? "查看本轮成绩 →" : "下一关 →"}</button>` : `${noHint ? `<span class="feature-note">🏁 终测无提示，首答准确才计入 ${state.today.sprint.wordIds.length}/${state.today.sprint.wordIds.length}</span>` : `<button class="btn btn-soft btn-small" type="button" data-action="practice-hint">${coreEnglish ? "Reveal one letter · 3 coins" : "提示一个字母 · 3 金币"}</button>`}<button class="btn btn-coral" type="button" data-action="check-practice">${coreEnglish ? "Check spelling" : "检查拼写"} ✓</button>`}
                 <small class="enter-key-hint">↵ ${coreEnglish ? (isPassed ? "Enter for the next word" : "Enter to check") : (isPassed ? "按 Enter 进入下一题" : "按 Enter 检查")}</small>
@@ -2709,7 +2761,7 @@
               <h2>声音与辅助</h2>
               ${settingToggle("soundToggle", "开启英语发音", "整词与词根/音节都可以点击朗读", state.settings.sound)}
               ${settingToggle("autoSoundToggle", "学习卡自动朗读", "翻到新单词时先听一次标准声音", state.settings.autoSound)}
-              ${settingToggle("englishToggle", "显示英文释义", "训练时同时保留简短英文解释", state.settings.showEnglish)}
+              ${settingToggle("englishToggle", "显示英文辅助", "学习页显示原书释义；训练只显示不含答案的安全提示", state.settings.showEnglish)}
               ${settingToggle("typoToggle", "一次轻微拼写容错", "长词只错一个字母时先温柔提醒", state.settings.typoAssist)}
             </div>
 
@@ -3348,7 +3400,7 @@
     if (!game || game.index >= game.words.length) return finishPk();
     const word = game.words[game.index];
     const bankKey = safeBank(game.bankKey, state.today?.bank || state.settings.bank);
-    const clue = bankKey === "core2000" ? word.en : word.zh;
+    const clue = quizClueFor(word) || (bankKey === "core2000" ? "Look at the book picture." : word.zh);
     showDialog(`
       <div class="dialog-content">
         <div class="pk-game-head"><div class="pk-score"><span>Kevin <b id="kevinScore">${game.kevin}</b></span><span>Flash Fox <b id="botScore">${game.bot}</b></span></div><span class="pk-timer" id="pkTimer">${game.seconds}s</span></div>
@@ -3410,6 +3462,15 @@
     if (!target) return;
     const action = target.dataset.action;
     if (action === "speak") speak(target.dataset.say, target, finiteNumber(target.dataset.rate, 0.78, 0.5, 1.5));
+    else if (action === "speak-practice-word") {
+      const task = currentTask();
+      const word = task ? getWord(task.wordId) : null;
+      if (!task || !word) return;
+      task.assisted = true;
+      saveState();
+      speak(word.word, target, 0.72);
+      toast(isCoreDay() ? "Audio counted as a hint for this attempt." : "这次听音已记作提示", "🔊");
+    }
     else if (action === "speak-sequence") speakSequence(buildStudySpeechSequence(
       target.dataset.word,
       target.dataset.definition,
@@ -3722,6 +3783,12 @@
     normalizeAnswer,
     selectAmericanVoice,
     buildStudySpeechSequence,
+    spellingVariants,
+    answerFormsFor,
+    clueContainsAnswer,
+    studyDefinitionFor,
+    feedbackDefinitionFor,
+    quizClueFor,
     createPortableRecord,
     portableStateSummary,
     importedRecordIsOlder,
