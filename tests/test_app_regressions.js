@@ -339,8 +339,42 @@ const masteredProgress = api.sanitizeProgress({
     dueAt: Date.now()
   }
 });
-assert.equal(masteredProgress["ket:test"].step, 7);
-assert.equal(masteredProgress["ket:test"].dueAt, null);
+assert.equal(masteredProgress["ket:test"].status, "mature");
+assert.equal(masteredProgress["ket:test"].step, 6);
+assert.ok(Number.isFinite(masteredProgress["ket:test"].dueAt));
+assert.equal(api.isDue(masteredProgress["ket:test"], Date.now()), true, "old mastered cards must return to the review queue");
+assert.equal(masteredProgress["ket:test"].scheduleVersion, 2);
+
+const scheduleNow = new Date(2026, 8, 29, 8, 0, 0).getTime();
+const longTermProgress = api.nextReviewSchedule({
+  status: "reviewing",
+  learnedAt: scheduleNow - 40 * 86_400_000,
+  step: 5,
+  scheduleToken: 3,
+  lapses: 0,
+  correct: 6,
+  dueAt: scheduleNow
+}, "correct", false, scheduleNow);
+assert.equal(longTermProgress.status, "mature");
+assert.equal(longTermProgress.step, 6);
+assert.equal(longTermProgress.dueAt, new Date(2026, 10, 28, 8, 0, 0).getTime());
+assert.equal(longTermProgress.scheduleVersion, 2);
+assert.equal(longTermProgress.correct, 7);
+assert.equal(api.isDue(longTermProgress, longTermProgress.dueAt), true, "mature cards must remain reviewable");
+
+let cappedProgress = { ...longTermProgress, step: 9, dueAt: scheduleNow };
+cappedProgress = api.nextReviewSchedule(cappedProgress, "correct", false, scheduleNow);
+assert.equal(cappedProgress.step, 9);
+assert.equal(cappedProgress.status, "mature");
+assert.ok(cappedProgress.dueAt > scheduleNow, "the final stage must schedule another annual review");
+
+const relearningProgress = api.nextReviewSchedule({ ...longTermProgress, dueAt: scheduleNow }, "lapse", false, scheduleNow);
+assert.equal(relearningProgress.status, "relearning");
+assert.equal(relearningProgress.step, 0);
+assert.equal(relearningProgress.dueAt, scheduleNow + 10 * 60 * 1000);
+assert.equal(relearningProgress.lapses, 1);
+assert.equal(relearningProgress.correct, longTermProgress.correct, "a lapse must not fabricate a successful recall");
+assert.equal(relearningProgress.lastSuccessAt, longTermProgress.lastSuccessAt, "relearning preserves earlier success history");
 
 const baseBackup = {
   schemaVersion: 1,

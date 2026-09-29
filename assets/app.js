@@ -12,14 +12,19 @@
   const DEVICE_ID = getOrCreateDeviceId();
   const SESSION_ID = window.crypto?.randomUUID?.() || `session-${Date.now()}-${Math.random().toString(36).slice(2)}`;
   const SPRINT_SIZE = 30;
+  const REVIEW_SCHEDULE_VERSION = 2;
+  const MATURE_STEP = 6;
   const REVIEW_DELAYS = [
     { label: "10 分钟", ms: 10 * 60 * 1000, icon: "⏱" },
     { label: "1 天", days: 1, icon: "🌱" },
-    { label: "2 天", days: 2, icon: "🌿" },
-    { label: "4 天", days: 4, icon: "🪴" },
-    { label: "7 天", days: 7, icon: "🌳" },
-    { label: "15 天", days: 15, icon: "🏕️" },
-    { label: "30 天", days: 30, icon: "🏆" }
+    { label: "3 天", days: 3, icon: "🌿" },
+    { label: "7 天", days: 7, icon: "🪴" },
+    { label: "14 天", days: 14, icon: "🌳" },
+    { label: "30 天", days: 30, icon: "🏕️" },
+    { label: "60 天", days: 60, icon: "🏆" },
+    { label: "120 天", days: 120, icon: "🗻" },
+    { label: "240 天", days: 240, icon: "🌌" },
+    { label: "365 天", days: 365, icon: "⭐" }
   ];
 
   const BANK_META = {
@@ -421,31 +426,41 @@
 
   function sanitizeProgressItem(item) {
     if (!item || typeof item !== "object" || Array.isArray(item)) return null;
-    let status = ["learning", "reviewing", "mastered", "suspended"].includes(item.status) ? item.status : "learning";
-    let step = safeInteger(item.step, 0, 0, REVIEW_DELAYS.length);
+    const learnedAt = finiteNumber(item.learnedAt, Date.now(), 0, 9_999_999_999_999);
+    const lastSuccessAt = item.lastSuccessAt == null ? null : finiteNumber(item.lastSuccessAt, null, 0, 9_999_999_999_999);
+    const legacySchedule = safeInteger(item.scheduleVersion, 1, 1, REVIEW_SCHEDULE_VERSION) < REVIEW_SCHEDULE_VERSION;
+    let status = ["learning", "reviewing", "mature", "relearning", "suspended", "mastered"].includes(item.status) ? item.status : "learning";
+    let step = safeInteger(item.step, 0, 0, REVIEW_DELAYS.length - 1);
     let dueAt = item.dueAt == null ? null : finiteNumber(item.dueAt, null, 1, 9_999_999_999_999);
     if (status === "mastered") {
-      step = REVIEW_DELAYS.length;
-      dueAt = null;
-    } else if (status === "reviewing" && dueAt == null) {
+      status = "mature";
+      step = MATURE_STEP;
+      dueAt = addLocalDays(lastSuccessAt || learnedAt, REVIEW_DELAYS[MATURE_STEP].days);
+    } else if (legacySchedule && status === "reviewing") {
+      step = [0, 1, 2, 3, 3, 4, 5][Math.min(step, 6)];
+    }
+    if (["reviewing", "relearning"].includes(status) && dueAt == null) {
       // A reviewing word without a due date can never re-enter either the
       // learning queue or the review queue. Recover it as unfinished study.
       status = "learning";
-      step = Math.min(step, REVIEW_DELAYS.length - 1);
-    } else if (status === "reviewing") {
-      step = Math.min(step, REVIEW_DELAYS.length - 1);
-    } else {
+    } else if (status === "mature" && dueAt == null) {
+      step = Math.max(MATURE_STEP, step);
+      const delay = REVIEW_DELAYS[Math.min(step, REVIEW_DELAYS.length - 1)];
+      dueAt = addLocalDays(lastSuccessAt || learnedAt, delay.days);
+    } else if (["learning", "suspended"].includes(status)) {
       dueAt = null;
     }
     return {
       status,
-      learnedAt: finiteNumber(item.learnedAt, Date.now(), 0, 9_999_999_999_999),
+      learnedAt,
       step,
+      scheduleVersion: REVIEW_SCHEDULE_VERSION,
       scheduleToken: safeInteger(item.scheduleToken, 0, 0, 1_000_000),
       lapses: safeInteger(item.lapses, 0),
       correct: safeInteger(item.correct, 0),
       dueAt,
-      lastSuccessAt: item.lastSuccessAt == null ? null : finiteNumber(item.lastSuccessAt, null, 0, 9_999_999_999_999),
+      lastSuccessAt,
+      lastReviewedAt: item.lastReviewedAt == null ? null : finiteNumber(item.lastReviewedAt, null, 0, 9_999_999_999_999),
       initialModesDone: Array.isArray(item.initialModesDone)
         ? [...new Set(item.initialModesDone.filter((mode) => mode === "cloze" || mode === "full"))]
         : []
@@ -1053,7 +1068,7 @@
   }
 
   function isDue(progress, now = Date.now()) {
-    return Boolean(progress?.dueAt && progress.dueAt <= now && progress.status !== "mastered");
+    return Boolean(progress?.dueAt && progress.dueAt <= now && progress.status !== "suspended");
   }
 
   function getDueIds(now = Date.now()) {
@@ -1075,7 +1090,7 @@
   }
 
   function masteredCount(source = state) {
-    return Object.values(source.progress || {}).filter((item) => item.status === "mastered").length;
+    return Object.values(source.progress || {}).filter((item) => item.status === "mature").length;
   }
 
   function learnedInBank(bankKey) {
@@ -1661,38 +1676,44 @@
     }
   }
 
-  function scheduleWord(wordId, outcome = "correct", isInitial = false) {
-    const progress = state.progress[wordId] || {
+  function nextReviewSchedule(existing, outcome = "correct", isInitial = false, now = Date.now()) {
+    const progress = {
+      ...(existing || {
       status: "learning",
-      learnedAt: Date.now(),
+      learnedAt: now,
       step: 0,
       scheduleToken: 0,
       lapses: 0,
       correct: 0,
       initialModesDone: []
+      })
     };
-    let step = Number.isInteger(progress.step) ? progress.step : 0;
-    if (isInitial) step = 0;
-    else if (outcome === "correct") step += 1;
-    else {
-      step = Math.max(0, step - 2);
+    const currentStep = safeInteger(progress.step, 0, 0, REVIEW_DELAYS.length - 1);
+    let step = isInitial ? 0 : currentStep;
+    if (!isInitial && outcome === "correct") step = Math.min(REVIEW_DELAYS.length - 1, currentStep + 1);
+    if (!isInitial && outcome !== "correct") {
+      step = 0;
       progress.lapses = (progress.lapses || 0) + 1;
     }
 
-    if (step >= REVIEW_DELAYS.length) {
-      progress.status = "mastered";
-      progress.step = REVIEW_DELAYS.length;
-      progress.dueAt = null;
-    } else {
-      const delay = REVIEW_DELAYS[step];
-      progress.status = "reviewing";
-      progress.step = step;
-      progress.dueAt = delay.ms ? Date.now() + delay.ms : addLocalDays(Date.now(), delay.days);
+    const delay = REVIEW_DELAYS[step];
+    progress.status = outcome !== "correct" && !isInitial
+      ? "relearning"
+      : step >= MATURE_STEP ? "mature" : "reviewing";
+    progress.step = step;
+    progress.scheduleVersion = REVIEW_SCHEDULE_VERSION;
+    progress.dueAt = delay.ms ? now + delay.ms : addLocalDays(now, delay.days);
+    progress.lastReviewedAt = now;
+    if (isInitial || outcome === "correct") {
+      progress.lastSuccessAt = now;
+      progress.correct = (progress.correct || 0) + 1;
     }
     progress.scheduleToken = (progress.scheduleToken || 0) + 1;
-    progress.lastSuccessAt = Date.now();
-    progress.correct = (progress.correct || 0) + 1;
-    state.progress[wordId] = progress;
+    return progress;
+  }
+
+  function scheduleWord(wordId, outcome = "correct", isInitial = false) {
+    state.progress[wordId] = nextReviewSchedule(state.progress[wordId], outcome, isInitial);
   }
 
   function completeGoalIfReady() {
@@ -2268,7 +2289,7 @@
         <div class="quick-stats" aria-label="学习统计">
           <div class="quick-stat"><span class="quick-stat-icon">🧠</span><span><strong>${activeWords}</strong><small>记忆背包里的单词</small></span></div>
           <div class="quick-stat"><span class="quick-stat-icon">🎯</span><span><strong>${accuracy}%</strong><small>累计拼写正确率</small></span></div>
-          <div class="quick-stat"><span class="quick-stat-icon">🏆</span><span><strong>${masteredCount()}</strong><small>完成 30 天曲线</small></span></div>
+          <div class="quick-stat"><span class="quick-stat-icon">🏆</span><span><strong>${masteredCount()}</strong><small>进入长期低频复习</small></span></div>
         </div>
       </section>`;
   }
@@ -2583,9 +2604,9 @@
         ? "错词加练 · 完整拼写"
         : task.mode === "cloze" ? "半遮罩 · 补上消失的字母" : "全拼写 · 从图片找回单词";
     const sourceLabel = coreEnglish
-      ? task.source === "review" ? `EBBINGHAUS REVIEW · ${REVIEW_DELAYS[Math.min(progress?.step || 0, 6)]?.label.replace("分钟", "MIN").replace("天", "DAY") || "DUE NOW"}` : `CORE 2000 · ${task.mode === "cloze" ? "ROUND 1" : "ROUND 2"}`
+      ? task.source === "review" ? `EBBINGHAUS REVIEW · ${REVIEW_DELAYS[Math.min(progress?.step || 0, REVIEW_DELAYS.length - 1)]?.label.replace("分钟", "MIN").replace("天", "DAY") || "DUE NOW"}` : `CORE 2000 · ${task.mode === "cloze" ? "ROUND 1" : "ROUND 2"}`
       : task.source === "review"
-      ? `记忆曲线 · ${REVIEW_DELAYS[Math.min(progress?.step || 0, 6)]?.label || "复习"}回访`
+      ? `记忆曲线 · ${REVIEW_DELAYS[Math.min(progress?.step || 0, REVIEW_DELAYS.length - 1)]?.label || "复习"}回访`
       : task.source === "sprint"
         ? `考试冲刺 · DAY ${state.today.sprint.day} · ${sprintPhaseMeta(task.sprintPhase).title}`
         : "今日新词 · 拼写训练";
@@ -2774,10 +2795,10 @@
     if (isCoreDay()) return renderCoreReview();
     const dueIds = getDueIds();
     const progressItems = Object.values(state.progress);
-    const scheduled = progressItems.filter((item) => item.status === "reviewing").length;
+    const scheduled = progressItems.filter((item) => ["reviewing", "relearning", "mature"].includes(item.status)).length;
     const mastered = masteredCount();
     const nextDue = progressItems.map((item) => item.dueAt).filter((time) => time && time > Date.now()).sort((a, b) => a - b)[0];
-    const stationCounts = REVIEW_DELAYS.map((_, step) => progressItems.filter((item) => item.status === "reviewing" && item.step === step).length);
+    const stationCounts = REVIEW_DELAYS.map((_, step) => progressItems.filter((item) => ["reviewing", "relearning", "mature"].includes(item.status) && item.step === step).length);
 
     return `
       <section class="view-page">
@@ -2789,20 +2810,20 @@
         <div class="review-summary">
           <div class="review-stat-card"><strong>${dueIds.length}</strong><span>现在到期</span></div>
           <div class="review-stat-card"><strong>${scheduled}</strong><span>曲线生长中</span></div>
-          <div class="review-stat-card"><strong>${mastered}</strong><span>完成 30 天</span></div>
+          <div class="review-stat-card"><strong>${mastered}</strong><span>长期低频复习</span></div>
           <div class="review-stat-card"><strong>${nextDue ? relativeTime(nextDue) : "—"}</strong><span>下一次回访</span></div>
         </div>
 
-        <section class="memory-map" aria-label="艾宾浩斯七站复习地图">
+        <section class="memory-map" aria-label="艾宾浩斯十站长期复习地图">
           <div class="map-path" aria-hidden="true"></div>
           <div class="map-stations">
             ${REVIEW_DELAYS.map((delay, index) => {
               const count = stationCounts[index];
-              const masteredStation = index === REVIEW_DELAYS.length - 1 && mastered > 0;
+              const masteredStation = index >= MATURE_STEP && count > 0;
               return `<div class="map-station ${count ? "has-words" : ""} ${masteredStation ? "is-mastered" : ""}"><span class="station-node">${delay.icon}</span><strong>第 ${index + 1} 站 · ${delay.label}</strong><small>${count ? `${count} 个单词在这里` : "等待抵达"}</small></div>`;
             }).join("")}
           </div>
-          <div class="map-legend"><p><strong>复习规则：</strong>答对就前进一站；答错会回到更短的间隔，但追回后仍然有少量积分。<br />10 分钟 → 1 天 → 2 天 → 4 天 → 7 天 → 15 天 → 30 天</p>${dueIds.length ? `<button class="btn btn-coral" type="button" data-action="start-review">现在复习</button>` : `<span class="book-tag">🌿 记忆正在生长</span>`}</div>
+          <div class="map-legend"><p><strong>复习规则：</strong>答对就前进一站；答错进入 10 分钟重新学习，但不会清空以前的记录。<br />10 分钟 → 1 天 → 3 天 → 7 天 → 14 天 → 30 天 → 60 天 → 120 天 → 240 天 → 365 天</p>${dueIds.length ? `<button class="btn btn-coral" type="button" data-action="start-review">现在复习</button>` : `<span class="book-tag">🌿 记忆正在生长</span>`}</div>
         </section>
       </section>`;
   }
@@ -2811,13 +2832,13 @@
     const coreIds = bankWordIds("core2000");
     const entries = Object.entries(state.progress).filter(([id]) => coreIds.has(id));
     const dueIds = coreDueIds(Date.now(), state.today.newIds);
-    const scheduled = entries.filter(([, item]) => item.status === "reviewing").length;
-    const mastered = entries.filter(([, item]) => item.status === "mastered").length;
+    const scheduled = entries.filter(([, item]) => ["reviewing", "relearning", "mature"].includes(item.status)).length;
+    const mastered = entries.filter(([, item]) => item.status === "mature").length;
     const nextDue = entries.map(([, item]) => item.dueAt).filter((time) => time && time > Date.now()).sort((a, b) => a - b)[0];
-    const labels = ["10 MIN", "1 DAY", "2 DAYS", "4 DAYS", "7 DAYS", "15 DAYS", "30 DAYS"];
-    const counts = REVIEW_DELAYS.map((_, step) => entries.filter(([, item]) => item.status === "reviewing" && item.step === step).length);
+    const labels = ["10 MIN", "1 DAY", "3 DAYS", "7 DAYS", "14 DAYS", "30 DAYS", "60 DAYS", "120 DAYS", "240 DAYS", "365 DAYS"];
+    const counts = REVIEW_DELAYS.map((_, step) => entries.filter(([, item]) => ["reviewing", "relearning", "mature"].includes(item.status) && item.step === step).length);
     const nextText = !nextDue ? "—" : nextDue - Date.now() < 3_600_000 ? `${Math.max(1, Math.ceil((nextDue - Date.now()) / 60_000))} MIN` : nextDue - Date.now() < DAY_MS ? `${Math.ceil((nextDue - Date.now()) / 3_600_000)} HOURS` : `${Math.ceil((nextDue - Date.now()) / DAY_MS)} DAYS`;
-    return `<section class="view-page"><div class="page-heading"><div><p class="eyebrow">EBBINGHAUS MEMORY MAP</p><h1>Come back just before the memory fades.</h1><p>Every successful recall moves a word to a longer interval. A missed word returns sooner for extra support.</p></div>${dueIds.length ? `<button class="btn btn-coral" type="button" data-action="start-review">Review ${dueIds.length} due word${dueIds.length === 1 ? "" : "s"} →</button>` : `<span class="date-stamp">ALL CLEAR ✓</span>`}</div><div class="review-summary"><div class="review-stat-card"><strong>${dueIds.length}</strong><span>DUE NOW</span></div><div class="review-stat-card"><strong>${scheduled}</strong><span>GROWING</span></div><div class="review-stat-card"><strong>${mastered}</strong><span>MASTERED</span></div><div class="review-stat-card"><strong>${nextText}</strong><span>NEXT REVIEW</span></div></div><section class="memory-map" aria-label="Seven-stage Ebbinghaus review map"><div class="map-path" aria-hidden="true"></div><div class="map-stations">${REVIEW_DELAYS.map((delay, index) => `<div class="map-station ${counts[index] ? "has-words" : ""} ${index === REVIEW_DELAYS.length - 1 && mastered ? "is-mastered" : ""}"><span class="station-node">${delay.icon}</span><strong>STAGE ${index + 1} · ${labels[index]}</strong><small>${counts[index] ? `${counts[index]} word${counts[index] === 1 ? "" : "s"} here` : "Waiting for a word"}</small></div>`).join("")}</div><div class="map-legend"><p><strong>Review path:</strong> 10 minutes → 1 day → 2 days → 4 days → 7 days → 15 days → 30 days.<br />Correct recall moves forward; a lapse returns the word to a shorter interval.</p>${dueIds.length ? `<button class="btn btn-coral" type="button" data-action="start-review">Start memory review</button>` : `<span class="book-tag">🌿 MEMORY IS GROWING</span>`}</div></section></section>`;
+    return `<section class="view-page"><div class="page-heading"><div><p class="eyebrow">EBBINGHAUS MEMORY MAP</p><h1>Come back just before the memory fades.</h1><p>Every successful recall moves a word to a longer interval. A missed word returns sooner for extra support.</p></div>${dueIds.length ? `<button class="btn btn-coral" type="button" data-action="start-review">Review ${dueIds.length} due word${dueIds.length === 1 ? "" : "s"} →</button>` : `<span class="date-stamp">ALL CLEAR ✓</span>`}</div><div class="review-summary"><div class="review-stat-card"><strong>${dueIds.length}</strong><span>DUE NOW</span></div><div class="review-stat-card"><strong>${scheduled}</strong><span>SCHEDULED</span></div><div class="review-stat-card"><strong>${mastered}</strong><span>LONG-TERM</span></div><div class="review-stat-card"><strong>${nextText}</strong><span>NEXT REVIEW</span></div></div><section class="memory-map" aria-label="Ten-stage long-term Ebbinghaus review map"><div class="map-path" aria-hidden="true"></div><div class="map-stations">${REVIEW_DELAYS.map((delay, index) => `<div class="map-station ${counts[index] ? "has-words" : ""} ${index >= MATURE_STEP && counts[index] ? "is-mastered" : ""}"><span class="station-node">${delay.icon}</span><strong>STAGE ${index + 1} · ${labels[index]}</strong><small>${counts[index] ? `${counts[index]} word${counts[index] === 1 ? "" : "s"} here` : "Waiting for a word"}</small></div>`).join("")}</div><div class="map-legend"><p><strong>Review path:</strong> 10 minutes → 1 day → 3 days → 7 days → 14 days → 30 days → 60 days → 120 days → 240 days → 365 days.<br />Correct recall moves forward; a lapse starts a 10-minute relearning step without erasing earlier history.</p>${dueIds.length ? `<button class="btn btn-coral" type="button" data-action="start-review">Start memory review</button>` : `<span class="book-tag">🌿 MEMORY IS GROWING</span>`}</div></section></section>`;
   }
 
   function renderSettings() {
@@ -3991,6 +4012,8 @@
     recordCompletionState,
     sanitizeProgress,
     sanitizeProgressItem,
+    nextReviewSchedule,
+    isDue,
     sanitizeToday,
     mergeState,
     shouldRejectStaleWrite,

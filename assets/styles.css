@@ -2111,7 +2111,7 @@ button:disabled {
 
 .memory-map {
   position: relative;
-  min-height: 475px;
+  min-height: 620px;
   padding: 40px clamp(20px, 4vw, 50px);
   overflow: hidden;
   border: 1px solid var(--line);
@@ -2137,10 +2137,10 @@ button:disabled {
 .map-stations {
   position: relative;
   display: grid;
-  grid-template-columns: repeat(7, 1fr);
+  grid-template-columns: repeat(5, 1fr);
   align-items: center;
-  min-height: 330px;
-  gap: 12px;
+  min-height: 440px;
+  gap: 42px 12px;
 }
 
 .map-station {
