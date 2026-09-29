@@ -24,6 +24,8 @@ assert.equal(audit.summary.progress.dueAsOfSavedAt, 2);
 assert.equal(audit.summary.stats.xp, 500, "visible ledger must not replace the opening XP balance");
 assert.equal(audit.summary.stats.coins, 120, "visible ledger must not replace the opening coin balance");
 assert.equal(audit.summary.retainedHistory.ledgerXp, 45);
+assert.equal(audit.summary.attemptEvidence.events, 0);
+assert.match(audit.warnings.join(" "), /尚无逐题 attemptEvents/);
 
 const identical = inspectRecords([fixture, fixture]);
 assert.equal(identical.identical, true);

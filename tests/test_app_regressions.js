@@ -117,6 +117,33 @@ assert.deepEqual(Array.from(api.spellingAnswersFor(testWord)), ["truck"], "a syn
 assert.deepEqual(Array.from(api.spellingAnswersFor({ word: "colour", spellingVariants: ["color"] })), ["colour", "color"]);
 assert.equal(api.isPracticeLetter("é"), true, "accented English loanwords must remain typeable");
 assert.equal(api.isPracticeLetter("-"), false);
+const attemptEvent = api.createAttemptEvent({
+  task: {
+    mode: "full",
+    source: "review",
+    attempts: 1,
+    assisted: false,
+    usedAudio: false,
+    hintIndices: [],
+    attemptStartedAt: 1_000
+  },
+  word: coreWord,
+  answerCorrect: true,
+  answerShown: false,
+  nearMiss: false,
+  grade: "good",
+  oldDueAt: 1_500,
+  newDueAt: 9_000
+}, 7, 2_500);
+assert.equal(attemptEvent.cardId, coreWord.id);
+assert.equal(attemptEvent.cueType, "image");
+assert.equal(attemptEvent.firstAttempt, true);
+assert.equal(attemptEvent.durationMs, 1_500);
+assert.equal(attemptEvent.grade, "good");
+assert.equal(attemptEvent.sequence, 7);
+assert.equal(api.sanitizeAttemptEvents([attemptEvent, attemptEvent]).length, 1, "attempt events deduplicate by eventId");
+assert.equal(api.practiceCueType({ mode: "full", usedAudio: true }, testWord), "audio-dictation");
+assert.equal(api.practiceCueType({ mode: "cloze" }, testWord), "partial-spelling");
 
 const appSource = fs.readFileSync(path.join(__dirname, "..", "assets", "app.js"), "utf8");
 const practiceSource = appSource.slice(appSource.indexOf("function renderPractice()"), appSource.indexOf("function renderCoreExercise()"));
@@ -194,6 +221,7 @@ assert.equal(portableRecord.format, "kevin-word-quest-portable-record");
 assert.equal(portableRecord.formatVersion, 1);
 assert.equal(portableRecord.summary.activeBank, "core2000");
 assert.equal(portableRecord.summary.learnedWords, 1);
+assert.equal(portableRecord.summary.attemptEvents, 0);
 const protectedSummary = api.portableStateSummary({
   savedAt: 100,
   updatedAt: 200,
@@ -207,6 +235,7 @@ assert.deepEqual(JSON.parse(JSON.stringify(protectedSummary)), {
   words: 2,
   xp: 50,
   coins: 25,
+  events: 0,
   pending: 1,
   todayDate: "2026-08-26"
 });
@@ -248,7 +277,9 @@ assert.deepEqual(JSON.parse(JSON.stringify(retryTask)), {
   attempts: 0,
   hadLapse: false,
   assisted: false,
+  usedAudio: false,
   nearMissUsed: false,
+  attemptStartedAt: retryTask.attemptStartedAt,
   completedAt: null,
   draft: "",
   hintIndices: [],

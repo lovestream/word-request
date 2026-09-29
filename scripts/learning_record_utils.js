@@ -60,6 +60,7 @@ function summarizeRecord(record) {
   const exercises = Object.values(state.coreExercises || {});
   const ledger = Array.isArray(state.scoreLedger) ? state.scoreLedger : [];
   const history = Array.isArray(state.history) ? state.history : [];
+  const attemptEvents = Array.isArray(state.attemptEvents) ? state.attemptEvents : [];
 
   return {
     sha256: record.sha256,
@@ -93,6 +94,13 @@ function summarizeRecord(record) {
       goalHistoryRows: history.length,
       ledgerIsTruncated: ledger.length >= 500,
       goalHistoryMayBeTruncated: history.length >= 120
+    },
+    attemptEvidence: {
+      events: attemptEvents.length,
+      firstAttempts: attemptEvents.filter((event) => event?.firstAttempt).length,
+      independentGood: attemptEvents.filter((event) => event?.grade === "good" && !event?.usedHint && !event?.answerShown).length,
+      byGrade: countBy(attemptEvents, (event) => event?.grade || "unknown"),
+      byCueType: countBy(attemptEvents, (event) => event?.cueType || "unknown")
     },
     coreExercises: {
       total: exercises.length,

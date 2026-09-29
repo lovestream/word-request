@@ -5,8 +5,12 @@
   const BACKUP_KEY = "kevin-wordquest:backup:v1";
   const BACKUP_FORMAT = "kevin-word-quest-portable-record";
   const BACKUP_FORMAT_VERSION = 1;
+  const APP_VERSION = "2026.09.29";
+  const DEVICE_KEY = "kevin-wordquest:device-id:v1";
   const DAY_MS = 86_400_000;
   const WRITER_ID = window.crypto?.randomUUID?.() || `tab-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  const DEVICE_ID = getOrCreateDeviceId();
+  const SESSION_ID = window.crypto?.randomUUID?.() || `session-${Date.now()}-${Math.random().toString(36).slice(2)}`;
   const SPRINT_SIZE = 30;
   const REVIEW_DELAYS = [
     { label: "10 分钟", ms: 10 * 60 * 1000, icon: "⏱" },
@@ -138,6 +142,8 @@
       coreExercises: {},
       badges: {},
       scoreLedger: [],
+      attemptEvents: [],
+      attemptSequence: 0,
       today: null,
       history: [],
       dailyCompletion: {},
@@ -167,6 +173,20 @@
 
   function safeDateKey(value) {
     return typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value) ? value : null;
+  }
+
+  function getOrCreateDeviceId() {
+    try {
+      const storage = window.localStorage;
+      if (!storage) return `ephemeral-${WRITER_ID}`;
+      const existing = storage.getItem(DEVICE_KEY);
+      if (existing && /^[a-z0-9._-]{8,180}$/i.test(existing)) return existing;
+      const created = window.crypto?.randomUUID?.() || `device-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      storage.setItem(DEVICE_KEY, created);
+      return created;
+    } catch (error) {
+      return `ephemeral-${WRITER_ID}`;
+    }
   }
 
   function safeBank(value, fallback = "ket") {
@@ -519,7 +539,9 @@
       attempts: safeInteger(item.attempts, 0, 0, 1000),
       hadLapse: Boolean(item.hadLapse),
       assisted: Boolean(item.assisted),
+      usedAudio: Boolean(item.usedAudio),
       nearMissUsed: Boolean(item.nearMissUsed),
+      attemptStartedAt: finiteNumber(item.attemptStartedAt, Date.now(), 0, 9_999_999_999_999),
       maskSeed: safeText(item.maskSeed, id, 220),
       completedAt: item.completedAt == null ? null : finiteNumber(item.completedAt, null, 0, 9_999_999_999_999),
       hintIndices: Array.isArray(item.hintIndices) ? [...new Set(item.hintIndices.map((index) => safeInteger(index, -1, -1, 100)).filter((index) => index >= 0 && index < actualWord.word.length))] : [],
@@ -676,6 +698,43 @@
     return result;
   }
 
+  function sanitizeAttemptEvents(raw) {
+    if (!Array.isArray(raw)) return [];
+    const unique = new Map();
+    for (const item of raw) {
+      if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+      const eventId = safeText(item.eventId, "", 260);
+      const cardId = safeText(canonicalWordId(item.cardId), "", 220);
+      if (!/^[a-z0-9:._-]{8,260}$/i.test(eventId) || !cardId) continue;
+      const event = {
+        eventId,
+        cardId,
+        lexemeId: safeText(canonicalWordId(item.lexemeId || cardId), cardId, 220),
+        senseId: safeText(item.senseId, `${cardId}:default`, 240),
+        occurredAt: finiteNumber(item.occurredAt, 0, 0, 9_999_999_999_999),
+        mode: item.mode === "cloze" ? "cloze" : "full",
+        source: ["new", "review", "sprint", "pk"].includes(item.source) ? item.source : "new",
+        cueType: ["image", "definition", "audio-dictation", "sentence", "translation", "partial-spelling"].includes(item.cueType) ? item.cueType : "image",
+        firstAttempt: Boolean(item.firstAttempt),
+        usedHint: Boolean(item.usedHint),
+        answerShown: Boolean(item.answerShown),
+        nearMiss: Boolean(item.nearMiss),
+        answerCorrect: Boolean(item.answerCorrect),
+        grade: ["again", "hard", "good", "easy"].includes(item.grade) ? item.grade : "again",
+        durationMs: finiteNumber(item.durationMs, 0, 0, 86_400_000),
+        oldDueAt: item.oldDueAt == null ? null : finiteNumber(item.oldDueAt, null, 0, 9_999_999_999_999),
+        newDueAt: item.newDueAt == null ? null : finiteNumber(item.newDueAt, null, 0, 9_999_999_999_999),
+        sessionId: safeText(item.sessionId, "legacy-session", 180),
+        deviceId: safeText(item.deviceId, "legacy-device", 180),
+        sequence: safeInteger(item.sequence, 0, 0, 1_000_000_000),
+        appVersion: safeText(item.appVersion, "unknown", 40),
+        contentVersion: safeText(item.contentVersion, "", 80)
+      };
+      if (!unique.has(eventId)) unique.set(eventId, event);
+    }
+    return [...unique.values()].sort((left, right) => left.occurredAt - right.occurredAt || left.eventId.localeCompare(right.eventId));
+  }
+
   function mergeState(raw, strict = false) {
     const fresh = defaultState();
     if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
@@ -745,6 +804,11 @@
       .filter((item) => item && typeof item === "object" && safeDateKey(item.date))
       .slice(-120)
       .map((item) => ({ date: item.date, bank: safeBank(item.bank, settings.bank), learned: safeInteger(item.learned, 0), reviewed: safeInteger(item.reviewed, 0), xp: safeInteger(item.xp, 0) })) : [];
+    const attemptEvents = sanitizeAttemptEvents(raw.attemptEvents);
+    const maxDeviceAttemptSequence = attemptEvents.reduce(
+      (maximum, event) => event.deviceId === DEVICE_ID ? Math.max(maximum, event.sequence) : maximum,
+      0
+    );
     const orphanProgress = {};
     const progress = restoreInitialModesFromLedger(sanitizeProgress(raw.progress, orphanProgress), scoreLedger);
     restoreOrphanProgress(raw.orphanProgress, progress, orphanProgress);
@@ -767,6 +831,11 @@
       coreExercises: sanitizeCoreExercises(raw.coreExercises),
       badges,
       scoreLedger,
+      attemptEvents,
+      attemptSequence: Math.max(
+        safeInteger(raw.attemptSequence, 0, 0, 1_000_000_000),
+        maxDeviceAttemptSequence
+      ),
       history,
       dailyCompletion: sanitizeDailyCompletion(raw.dailyCompletion),
       courseCompletion: sanitizeCourseCompletion(raw.courseCompletion),
@@ -1508,7 +1577,9 @@
       attempts: 0,
       hadLapse: false,
       assisted: false,
+      usedAudio: false,
       nearMissUsed: false,
+      attemptStartedAt: Date.now(),
       maskSeed: id,
       completedAt: null,
       draft: "",
@@ -1526,7 +1597,9 @@
     task.attempts = 0;
     task.hadLapse = false;
     task.assisted = false;
+    task.usedAudio = false;
     task.nearMissUsed = false;
+    task.attemptStartedAt = Date.now();
     task.completedAt = null;
     task.draft = "";
     task.hintIndices = [];
@@ -2941,10 +3014,57 @@
     return indices;
   }
 
+  function practiceCueType(task, word) {
+    if (task?.usedAudio) return "audio-dictation";
+    if (task?.mode === "cloze") return "partial-spelling";
+    if (quizClueFor(word)) return "definition";
+    return word?.englishOnly ? "image" : "translation";
+  }
+
+  function createAttemptEvent(details, sequence, occurredAt = Date.now()) {
+    const task = details.task;
+    const word = details.word;
+    const cardId = canonicalWordId(word.id);
+    const safeSequence = safeInteger(sequence, 1, 1, 1_000_000_000);
+    return {
+      eventId: `${DEVICE_ID}:${SESSION_ID}:${safeSequence}`,
+      cardId,
+      lexemeId: cardId,
+      senseId: `${cardId}:default`,
+      occurredAt,
+      mode: task.mode === "cloze" ? "cloze" : "full",
+      source: ["new", "review", "sprint"].includes(task.source) ? task.source : "new",
+      cueType: practiceCueType(task, word),
+      firstAttempt: task.attempts === 1,
+      usedHint: Boolean(task.assisted || task.hintIndices?.length),
+      answerShown: Boolean(details.answerShown),
+      nearMiss: Boolean(details.nearMiss),
+      answerCorrect: Boolean(details.answerCorrect),
+      grade: ["again", "hard", "good", "easy"].includes(details.grade) ? details.grade : "again",
+      durationMs: finiteNumber(occurredAt - finiteNumber(task.attemptStartedAt, occurredAt, 0, occurredAt), 0, 0, 86_400_000),
+      oldDueAt: details.oldDueAt ?? null,
+      newDueAt: details.newDueAt ?? null,
+      sessionId: SESSION_ID,
+      deviceId: DEVICE_ID,
+      sequence: safeSequence,
+      appVersion: APP_VERSION,
+      contentVersion: hashString(`${word.word}|${studyDefinitionFor(word)}|${word.example || ""}`).toString(16).padStart(8, "0")
+    };
+  }
+
+  function appendAttemptEvent(details) {
+    state.attemptSequence = safeInteger(state.attemptSequence, 0, 0, 999_999_999) + 1;
+    const event = createAttemptEvent(details, state.attemptSequence);
+    state.attemptEvents.push(event);
+    details.task.attemptStartedAt = Date.now();
+    return event;
+  }
+
   function gradePractice() {
     const task = currentTask();
     if (!task || task.status === "passed") return;
     const word = getWord(task.wordId);
+    const oldDueAt = state.progress[word.id]?.dueAt ?? null;
     const answer = collectPracticeAnswer(word);
     if (answer.hasBlank) {
       toast(isCoreDay() ? "Fill every letter box first." : "还有字母格没有填完", "✎");
@@ -3014,6 +3134,16 @@
           scheduleWord(word.id, "correct", true);
         }
       }
+      appendAttemptEvent({
+        task,
+        word,
+        answerCorrect: true,
+        answerShown: false,
+        nearMiss: false,
+        grade: cleanFirstTry ? "good" : "again",
+        oldDueAt,
+        newDueAt: state.progress[word.id]?.dueAt ?? null
+      });
       completeGoalIfReady();
       evaluateBadges();
       saveState();
@@ -3035,6 +3165,16 @@
       state.today.sessionMistakes += 1;
       task.feedback = { type: "wrong", message: isCoreDay() ? (task.attempts >= 3 ? "Look at the correct spelling, close your eyes, and try again:" : "Not yet. The correct spelling is:") : task.attempts >= 3 ? "先看一眼正确拼写，再闭眼重来：" : "差一点！正确拼写是：", word: word.word };
     }
+    appendAttemptEvent({
+      task,
+      word,
+      answerCorrect: false,
+      answerShown: !nearCandidate,
+      nearMiss: Boolean(nearCandidate),
+      grade: nearCandidate ? "hard" : "again",
+      oldDueAt,
+      newDueAt: state.progress[word.id]?.dueAt ?? null
+    });
     saveState();
     render();
   }
@@ -3312,6 +3452,7 @@
         activeBank: safeBank(sourceState?.settings?.bank, "ket"),
         xp: safeInteger(sourceState?.stats?.xp, 0),
         learnedWords: Object.keys(sourceState?.progress || {}).length + Object.keys(sourceState?.orphanProgress || {}).length,
+        attemptEvents: Array.isArray(sourceState?.attemptEvents) ? sourceState.attemptEvents.length : 0,
         currentDate: safeDateKey(sourceState?.today?.date)
       },
       state: sourceState
@@ -3324,6 +3465,7 @@
       words: Object.keys(sourceState?.progress || {}).length + Object.keys(sourceState?.orphanProgress || {}).length,
       xp: safeInteger(sourceState?.stats?.xp, 0),
       coins: safeInteger(sourceState?.stats?.coins, 0),
+      events: Array.isArray(sourceState?.attemptEvents) ? sourceState.attemptEvents.length : 0,
       pending: Array.isArray(sourceState?.today?.tasks)
         ? sourceState.today.tasks.filter((task) => task?.status !== "done").length
         : 0,
@@ -3381,7 +3523,7 @@
       const older = importedRecordIsOlder(state, candidate);
       runtime.pendingImport = { candidate, sourceSha256, before, after, filename: safeText(file.name, "学习记录", 180) };
       const fingerprint = sourceSha256 || "当前浏览器环境不可用";
-      showDialog(`<div class="dialog-content"><div class="dialog-icon">${older ? "⚠️" : "📦"}</div><h2>先核对，再恢复学习记录</h2><p>${older ? "这份文件比当前浏览器记录更旧。只有确认它确实是主记录时才继续。" : "网站已完成只读校验；确认后会先下载当前记录的恢复点，再执行替换。"}</p><div class="import-compare"><div><small>当前浏览器</small><strong>${before.words} 个词 · ${before.xp} XP</strong><span>${before.coins} 金币 · ${before.pending} 个未完成任务</span></div><div><small>准备导入</small><strong>${after.words} 个词 · ${after.xp} XP</strong><span>${after.coins} 金币 · ${after.pending} 个未完成任务</span></div></div><p class="record-transfer-note">文件：${escapeHtml(runtime.pendingImport.filename)}<br />SHA-256：${escapeHtml(fingerprint)}</p><div class="dialog-actions"><button class="btn btn-soft" type="button" data-action="close-dialog">取消</button><button class="btn ${older ? "btn-coral" : "btn-primary"}" type="button" data-action="confirm-import">${older ? "我确认使用较旧记录" : "保存恢复点并导入"}</button></div></div>`);
+      showDialog(`<div class="dialog-content"><div class="dialog-icon">${older ? "⚠️" : "📦"}</div><h2>先核对，再恢复学习记录</h2><p>${older ? "这份文件比当前浏览器记录更旧。只有确认它确实是主记录时才继续。" : "网站已完成只读校验；确认后会先下载当前记录的恢复点，再执行替换。"}</p><div class="import-compare"><div><small>当前浏览器</small><strong>${before.words} 个词 · ${before.xp} XP</strong><span>${before.coins} 金币 · ${before.pending} 个未完成任务 · ${before.events} 条逐题记录</span></div><div><small>准备导入</small><strong>${after.words} 个词 · ${after.xp} XP</strong><span>${after.coins} 金币 · ${after.pending} 个未完成任务 · ${after.events} 条逐题记录</span></div></div><p class="record-transfer-note">文件：${escapeHtml(runtime.pendingImport.filename)}<br />SHA-256：${escapeHtml(fingerprint)}</p><div class="dialog-actions"><button class="btn btn-soft" type="button" data-action="close-dialog">取消</button><button class="btn ${older ? "btn-coral" : "btn-primary"}" type="button" data-action="confirm-import">${older ? "我确认使用较旧记录" : "保存恢复点并导入"}</button></div></div>`);
     } catch (error) {
       runtime.pendingImport = null;
       console.warn(error);
@@ -3504,6 +3646,7 @@
       const word = task ? getWord(task.wordId) : null;
       if (!task || !word) return;
       task.assisted = true;
+      task.usedAudio = true;
       saveState();
       speak(word.word, target, 0.72);
       toast(isCoreDay() ? "Audio counted as a hint for this attempt." : "这次听音已记作提示", "🔊");
@@ -3822,6 +3965,9 @@
     semanticAlternativesFor,
     spellingAnswersFor,
     canonicalWordId,
+    sanitizeAttemptEvents,
+    practiceCueType,
+    createAttemptEvent,
     selectAmericanVoice,
     buildStudySpeechSequence,
     spellingVariants,

@@ -14,6 +14,9 @@ function auditRecord(filename) {
     warnings: [
       "learned 是历史接触计数，不代表长期掌握",
       "correct/attempts 是旧版累计提交口径，不代表无提示首答正确率",
+      ...(record.state.attemptEvents?.length
+        ? ["attemptEvents 只记录升级后发生的真实提交，不反推或伪造旧历史"]
+        : ["这份旧记录尚无逐题 attemptEvents，不能推断每题首答质量"]),
       ...(record.state.scoreLedger?.length >= 500
         ? ["scoreLedger 已达到500条保留上限，不能用于反推全部XP或金币"]
         : [])
