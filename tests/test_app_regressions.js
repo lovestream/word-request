@@ -38,6 +38,13 @@ const coreWord = {
   englishOnly: true
 };
 
+const coreTruck = {
+  ...coreWord,
+  id: "core2000:truck",
+  word: "truck",
+  en: "a large vehicle used to carry goods"
+};
+
 const windowStub = {
   CORE2000_COURSE: {
     batches: [{ exercise: { id: "core2000-b1-u01-a-exercise" } }],
@@ -47,7 +54,7 @@ const windowStub = {
     "core2000-b1-u01-a-exercise": ["a", "a", "d", "b", "c", "ease", "dentist", "finger", "body", "healthy"]
   },
   WORD_BANKS: {
-    core2000: [coreWord],
+    core2000: [coreWord, coreTruck],
     movers: [],
     ket: [testWord],
     junior: [],
@@ -101,6 +108,7 @@ vm.runInNewContext(
 const api = windowStub.WordQuestTest;
 assert.ok(api, "app regression API should be available");
 assert.equal(api.canonicalWordId("core2000:old-memory"), "core2000:test");
+assert.equal(api.lexemeIdForWord(testWord), api.lexemeIdForWord(coreTruck), "the same spelling across banks must share one lexeme ID");
 const aliasedProgress = api.sanitizeProgress({
   "core2000:old-memory": { status: "reviewing", learnedAt: 10, step: 1, scheduleToken: 2, dueAt: 20, correct: 3 }
 });
@@ -481,6 +489,38 @@ const frozenPlan = api.mergeState({
 assert.deepEqual(Array.from(frozenPlan.today.plannedReviewIds), ["ket:test"]);
 assert.equal(frozenPlan.today.plannedReviewIds.includes("core2000:test"), false, "a later due card must not expand today's frozen plan");
 assert.deepEqual(Array.from(frozenPlan.today.reviewBacklogIds), ["core2000:test"]);
+
+const sharedLexemeState = api.mergeState({
+  ...baseBackup,
+  progress: {
+    "ket:test": {
+      status: "mature",
+      learnedAt: 10,
+      step: 6,
+      scheduleVersion: 2,
+      scheduleToken: 5,
+      dueAt: Date.now() + 60 * 86_400_000,
+      lastReviewedAt: 100,
+      lastSuccessAt: 100
+    },
+    "core2000:truck": {
+      status: "relearning",
+      learnedAt: 20,
+      step: 0,
+      scheduleVersion: 2,
+      scheduleToken: 2,
+      dueAt: Date.now() + 10 * 60_000,
+      lastReviewedAt: 200,
+      lastSuccessAt: 50
+    }
+  },
+  today: null
+}, true);
+const truckLexemeId = api.lexemeIdForWord(testWord);
+assert.equal(Object.keys(sharedLexemeState.lexemeProgress).length, 1, "duplicate source cards must migrate into one spelling schedule");
+assert.equal(sharedLexemeState.lexemeProgress[truckLexemeId].status, "relearning", "the latest observed lapse must win as one complete schedule record");
+assert.equal(sharedLexemeState.lexemeProgress[truckLexemeId].step, 0);
+assert.equal(api.initialScheduleNeeded(sharedLexemeState.lexemeProgress[truckLexemeId], true), false, "studying the same spelling from another source must not reset its schedule");
 
 const duplicateNewBackup = {
   ...baseBackup,

@@ -82,6 +82,7 @@
   let pkTimer = null;
   let cachedWordIndex = null;
   let cachedBankWordIds = null;
+  let cachedLexemeMembers = null;
   const runtime = {
     breakdownOpen: false,
     feedback: null,
@@ -148,6 +149,7 @@
         lastGoalDate: null
       },
       progress: {},
+      lexemeProgress: {},
       orphanProgress: {},
       coreExercises: {},
       badges: {},
@@ -245,7 +247,7 @@
     const batch = coreBatchById(day.coreBatchId);
     return Boolean(batch?.wordIds?.length && batch.wordIds.every((id) => {
       const progress = state.progress[id];
-      return progress?.dueAt && progress.initialModesDone?.includes("cloze") && progress.initialModesDone?.includes("full");
+      return spellingProgress(id)?.dueAt && progress?.initialModesDone?.includes("cloze") && progress?.initialModesDone?.includes("full");
     }));
   }
 
@@ -521,6 +523,30 @@
     }
   }
 
+  function progressEvidenceAt(item) {
+    return finiteNumber(item?.lastReviewedAt ?? item?.lastSuccessAt ?? item?.learnedAt, 0, 0, 9_999_999_999_999);
+  }
+
+  function sanitizeLexemeProgress(rawLexemeProgress, cardProgress) {
+    const result = {};
+    if (rawLexemeProgress && typeof rawLexemeProgress === "object" && !Array.isArray(rawLexemeProgress)) {
+      for (const [lexemeId, item] of Object.entries(rawLexemeProgress)) {
+        if (!/^lexeme-[\p{L}\p{N}-]{1,100}$/u.test(lexemeId)) continue;
+        const sanitized = sanitizeProgressItem(item);
+        if (sanitized) result[lexemeId] = sanitized;
+      }
+    }
+    for (const [cardId, item] of Object.entries(cardProgress || {})) {
+      const lexemeId = lexemeIdForWord(cardId);
+      if (!lexemeId) continue;
+      const existing = result[lexemeId];
+      if (!existing || progressEvidenceAt(item) > progressEvidenceAt(existing)) {
+        result[lexemeId] = { ...item };
+      }
+    }
+    return result;
+  }
+
   function sanitizeCoreExercises(raw) {
     const result = {};
     if (!raw || typeof raw !== "object" || Array.isArray(raw)) return result;
@@ -588,7 +614,7 @@
     };
   }
 
-  function sanitizeToday(rawToday, settings, progress = {}) {
+  function sanitizeToday(rawToday, settings, progress = {}, lexemeProgress = {}) {
     if (!rawToday || typeof rawToday !== "object" || Array.isArray(rawToday) || !safeDateKey(rawToday.date)) return null;
     const bank = safeBank(rawToday.bank, settings.bank);
     const practiceMode = ["mixed", "cloze", "full", "sprint"].includes(rawToday.practiceMode) ? rawToday.practiceMode : settings.practiceMode;
@@ -604,7 +630,11 @@
       ...(rawToday.dueIds || []),
       ...(rawToday.reviewBacklogIds || [])
     ]).filter((id) => Boolean(progress[id]));
-    const generatedPlan = buildDailyPlan(rawDueAllIds, progress, settings.dailyGoal);
+    const generatedPlan = buildDailyPlan(
+      rawDueAllIds,
+      Object.fromEntries(rawDueAllIds.map((id) => [id, lexemeProgress[lexemeIdForWord(id)] || progress[id]])),
+      settings.dailyGoal
+    );
     const hasFrozenPlan = safeInteger(rawToday.planVersion, 0, 0, DAILY_PLAN_VERSION) === DAILY_PLAN_VERSION;
     const plannedReviewIds = isSprint
       ? []
@@ -674,7 +704,7 @@
             task.maskSeed = task.id;
             return task;
           }
-          const wordProgress = progress[task.wordId];
+          const wordProgress = lexemeProgress[lexemeIdForWord(task.wordId)] || progress[task.wordId];
           if (!dueIdSet.has(task.wordId) || !wordProgress || task.mode !== reviewMode) return null;
           if (task.status === "queued" && !isDue(wordProgress)) return null;
           const currentToken = safeInteger(wordProgress.scheduleToken, 0, 0, 1_000_000);
@@ -799,7 +829,9 @@
       const event = {
         eventId,
         cardId,
-        lexemeId: safeText(canonicalWordId(item.lexemeId || cardId), cardId, 220),
+        lexemeId: /^lexeme-/.test(item.lexemeId || "")
+          ? safeText(item.lexemeId, lexemeIdForWord(cardId) || cardId, 220)
+          : lexemeIdForWord(cardId) || safeText(canonicalWordId(item.lexemeId || cardId), cardId, 220),
         senseId: safeText(item.senseId, `${cardId}:default`, 240),
         occurredAt: finiteNumber(item.occurredAt, 0, 0, 9_999_999_999_999),
         mode: item.mode === "cloze" ? "cloze" : "full",
@@ -905,6 +937,7 @@
     const orphanProgress = {};
     const progress = restoreInitialModesFromLedger(sanitizeProgress(raw.progress, orphanProgress), scoreLedger);
     restoreOrphanProgress(raw.orphanProgress, progress, orphanProgress);
+    const lexemeProgress = sanitizeLexemeProgress(raw.lexemeProgress, progress);
     return {
       schemaVersion: 1,
       savedAt: finiteNumber(raw.savedAt, Date.now(), 0, 9_999_999_999_999),
@@ -920,6 +953,7 @@
       settings,
       stats,
       progress,
+      lexemeProgress,
       orphanProgress,
       coreExercises: sanitizeCoreExercises(raw.coreExercises),
       badges,
@@ -932,7 +966,7 @@
       history,
       dailyCompletion: sanitizeDailyCompletion(raw.dailyCompletion),
       courseCompletion: sanitizeCourseCompletion(raw.courseCompletion),
-      today: sanitizeToday(raw.today, settings, progress)
+      today: sanitizeToday(raw.today, settings, progress, lexemeProgress)
     };
   }
 
@@ -1117,6 +1151,34 @@
     return wordIndex().get(canonicalWordId(id));
   }
 
+  function lexemeIdForWord(wordOrId) {
+    const word = typeof wordOrId === "string" ? getWord(wordOrId) : wordOrId;
+    const surface = normalizeAnswer(word?.word || "").normalize("NFKC");
+    if (!surface) return "";
+    const slug = surface.replace(/[^\p{L}\p{N}]+/gu, "-").replace(/^-|-$/g, "").slice(0, 48) || "word";
+    return `lexeme-${slug}-${hashString(surface).toString(16).padStart(8, "0")}`;
+  }
+
+  function lexemeMembers() {
+    if (cachedLexemeMembers) return cachedLexemeMembers;
+    cachedLexemeMembers = new Map();
+    for (const word of allWords()) {
+      const lexemeId = lexemeIdForWord(word);
+      if (!cachedLexemeMembers.has(lexemeId)) cachedLexemeMembers.set(lexemeId, []);
+      cachedLexemeMembers.get(lexemeId).push(word.id);
+    }
+    return cachedLexemeMembers;
+  }
+
+  function spellingProgress(wordId, source = state) {
+    const lexemeId = lexemeIdForWord(wordId);
+    return source?.lexemeProgress?.[lexemeId] || source?.progress?.[canonicalWordId(wordId)] || null;
+  }
+
+  function spellingProgressMap(ids, source = state) {
+    return Object.fromEntries((ids || []).map((id) => [id, spellingProgress(id, source)]));
+  }
+
   function moversSequenceValue(word) {
     if (!word) return Number.MAX_SAFE_INTEGER;
     const section = word.cardType === "phrase" ? 1 : 0;
@@ -1149,16 +1211,27 @@
     return Boolean(progress?.dueAt && progress.dueAt <= now && progress.status !== "suspended");
   }
 
-  function getDueIds(now = Date.now()) {
-    return Object.entries(state.progress)
-      .filter(([, progress]) => isDue(progress, now))
-      .sort((a, b) => (a[1].dueAt || 0) - (b[1].dueAt || 0))
-      .map(([id]) => id)
-      .filter((id) => getWord(id));
+  function getDueIds(now = Date.now(), bankKey = null) {
+    const allowed = bankKey ? bankWordIds(bankKey) : null;
+    const representatives = new Map();
+    for (const id of Object.keys(state.progress)) {
+      if (!getWord(id) || (allowed && !allowed.has(id))) continue;
+      const progress = spellingProgress(id);
+      if (!isDue(progress, now)) continue;
+      const lexemeId = lexemeIdForWord(id);
+      const existingId = representatives.get(lexemeId);
+      if (!existingId || progressEvidenceAt(state.progress[id]) > progressEvidenceAt(state.progress[existingId])) {
+        representatives.set(lexemeId, id);
+      }
+    }
+    return [...representatives.values()].sort((left, right) =>
+      (spellingProgress(left)?.dueAt || 0) - (spellingProgress(right)?.dueAt || 0)
+      || String(left).localeCompare(String(right))
+    );
   }
 
   function coreDueIds(now = Date.now(), excluding = []) {
-    return filterDueIdsForBank(getDueIds(now), "core2000", excluding);
+    return filterDueIdsForBank(getDueIds(now, "core2000"), "core2000", excluding);
   }
 
   function filterDueIdsForBank(dueIds, bankKey, excluding = []) {
@@ -1212,7 +1285,7 @@
   }
 
   function masteredCount(source = state) {
-    return Object.values(source.progress || {}).filter((item) => item.status === "mature").length;
+    return Object.values(source.lexemeProgress || source.progress || {}).filter((item) => item.status === "mature").length;
   }
 
   function learnedInBank(bankKey) {
@@ -1292,7 +1365,7 @@
     if (state.settings.bank === "core2000") {
       const batch = coreBatchInfo(state.settings.coreBatch);
       const dueAllIds = coreDueIds(Date.now());
-      const plan = buildDailyPlan(dueAllIds, state.progress, state.settings.dailyGoal);
+      const plan = buildDailyPlan(dueAllIds, spellingProgressMap(dueAllIds), state.settings.dailyGoal);
       const pendingSetIds = (batch?.wordIds || []).filter((id) => {
         const progress = state.progress[id];
         return !progress?.dueAt && (!progress?.learnedAt || progress.status === "learning");
@@ -1401,7 +1474,7 @@
     const carryLearned = carryover.filter((id) => state.progress[id]?.learnedAt);
     const unseen = bankWords.filter((word) => !state.progress[word.id]?.learnedAt && !carryover.includes(word.id));
     const dueAllIds = getDueIds();
-    const plan = buildDailyPlan(dueAllIds, state.progress, state.settings.dailyGoal);
+    const plan = buildDailyPlan(dueAllIds, spellingProgressMap(dueAllIds), state.settings.dailyGoal);
     const plannedCarryover = carryover.slice(0, plan.newLimit);
     const slots = Math.max(0, plan.newLimit - plannedCarryover.length);
     const selectedPool = state.settings.bank === "movers"
@@ -1647,7 +1720,7 @@
     state.today.reviewBacklogIds = state.today.dueAllIds.filter((id) =>
       !plannedSet.has(id)
       && !state.today.reviewDoneIds.includes(id)
-      && isDue(state.progress[id])
+      && isDue(spellingProgress(id))
     );
     syncPracticeTasks();
   }
@@ -1764,9 +1837,9 @@
     }
 
     for (const wordId of state.today.dueIds) {
-      if (!isDue(state.progress[wordId])) continue;
+      if (!isDue(spellingProgress(wordId))) continue;
       const mode = state.today.practiceMode === "cloze" ? "cloze" : "full";
-      const token = state.progress[wordId]?.scheduleToken || 0;
+      const token = spellingProgress(wordId)?.scheduleToken || 0;
       const id = `review:${wordId}:${token}:${mode}`;
       if (!existingIds.has(id)) {
         tasks.push(makeTask(id, wordId, "review", mode));
@@ -1910,8 +1983,30 @@
     return progress;
   }
 
+  function initialScheduleNeeded(existing, requestedInitial) {
+    return Boolean(requestedInitial && !existing?.dueAt);
+  }
+
   function scheduleWord(wordId, outcome = "good", isInitial = false) {
-    state.progress[wordId] = nextReviewSchedule(state.progress[wordId], outcome, isInitial);
+    const canonicalId = canonicalWordId(wordId);
+    const lexemeId = lexemeIdForWord(canonicalId);
+    const existing = spellingProgress(canonicalId) || state.progress[canonicalId];
+    const effectiveInitial = initialScheduleNeeded(existing, isInitial);
+    const next = nextReviewSchedule(existing, outcome, effectiveInitial);
+    state.lexemeProgress[lexemeId] = next;
+    state.progress[canonicalId] = {
+      ...(state.progress[canonicalId] || next),
+      status: next.status,
+      step: next.step,
+      scheduleVersion: next.scheduleVersion,
+      scheduleToken: next.scheduleToken,
+      lapses: next.lapses,
+      correct: next.correct,
+      dueAt: next.dueAt,
+      lastSuccessAt: next.lastSuccessAt,
+      lastReviewedAt: next.lastReviewedAt,
+      lastGrade: next.lastGrade
+    };
   }
 
   function completeGoalIfReady() {
@@ -1923,7 +2018,7 @@
       : day.newIds.length === 0 || day.newIds.every((id) => day.practicedIds.includes(id));
     const baselineReviewsDone = isSprint
       ? true
-      : day.baselineDueIds.every((id) => day.reviewDoneIds.includes(id) || !isDue(state.progress[id]));
+      : day.baselineDueIds.every((id) => day.reviewDoneIds.includes(id) || !isDue(spellingProgress(id)));
     const hadPlannedWork = isSprint ? Boolean(day.sprint?.wordIds.length) : day.newIds.length > 0 || day.baselineDueIds.length > 0;
     if (!hadPlannedWork || !allNewDone || !baselineReviewsDone) return false;
 
@@ -2407,9 +2502,9 @@
 
   function dailyPlanMetrics(day = state.today) {
     const plannedReviewIds = day?.plannedReviewIds || day?.baselineDueIds || [];
-    const reviewDone = plannedReviewIds.filter((id) => day.reviewDoneIds?.includes(id) || !isDue(state.progress[id])).length;
+    const reviewDone = plannedReviewIds.filter((id) => day.reviewDoneIds?.includes(id) || !isDue(spellingProgress(id))).length;
     const reviewRemaining = Math.max(0, plannedReviewIds.length - reviewDone);
-    const backlog = (day?.reviewBacklogIds || []).filter((id) => isDue(state.progress[id])).length;
+    const backlog = (day?.reviewBacklogIds || []).filter((id) => isDue(spellingProgress(id))).length;
     return {
       dueAll: reviewRemaining + backlog,
       plannedReviews: plannedReviewIds.length,
@@ -2447,7 +2542,7 @@
     const circumference = 276.46;
     const dashOffset = circumference * (1 - progressPercent / 100);
     const cta = homeCta();
-    const activeWords = Object.keys(state.progress).length;
+    const activeWords = Object.keys(state.lexemeProgress || state.progress).length;
     const accuracy = state.stats.attempts ? Math.round((state.stats.correct / state.stats.attempts) * 100) : 100;
     const remaining = Math.max(0, total - learned);
     const practiceTasks = day.tasks.filter((task) => task.source === "new");
@@ -2813,7 +2908,7 @@
     }
 
     const word = getWord(task.wordId);
-    const progress = state.progress[word.id];
+    const progress = spellingProgress(word.id);
     const mask = makeMask(word.word, task.maskSeed, task.mode);
     const isPassed = task.status === "passed";
     const feedback = task.feedback || null;
@@ -3030,7 +3125,7 @@
     if (isCoreDay()) return renderCoreReview();
     const dueIds = getDueIds();
     const plan = dailyPlanMetrics();
-    const progressItems = Object.values(state.progress);
+    const progressItems = Object.values(state.lexemeProgress || state.progress);
     const scheduled = progressItems.filter((item) => ["reviewing", "relearning", "mature"].includes(item.status)).length;
     const mastered = masteredCount();
     const nextDue = progressItems.map((item) => item.dueAt).filter((time) => time && time > Date.now()).sort((a, b) => a - b)[0];
@@ -3066,7 +3161,15 @@
 
   function renderCoreReview() {
     const coreIds = bankWordIds("core2000");
-    const entries = Object.entries(state.progress).filter(([id]) => coreIds.has(id));
+    const seenLexemes = new Set();
+    const entries = Object.keys(state.progress)
+      .filter((id) => coreIds.has(id))
+      .map((id) => [lexemeIdForWord(id), spellingProgress(id)])
+      .filter(([lexemeId, progress]) => {
+        if (!progress || seenLexemes.has(lexemeId)) return false;
+        seenLexemes.add(lexemeId);
+        return true;
+      });
     const dueIds = coreDueIds(Date.now(), state.today.newIds);
     const plan = dailyPlanMetrics();
     const scheduled = entries.filter(([, item]) => ["reviewing", "relearning", "mature"].includes(item.status)).length;
@@ -3287,7 +3390,7 @@
     return {
       eventId: `${DEVICE_ID}:${SESSION_ID}:${safeSequence}`,
       cardId,
-      lexemeId: cardId,
+      lexemeId: lexemeIdForWord(word),
       senseId: `${cardId}:default`,
       occurredAt,
       mode: task.mode === "cloze" ? "cloze" : "full",
@@ -3330,7 +3433,7 @@
     const task = currentTask();
     if (!task || task.status === "passed") return;
     const word = getWord(task.wordId);
-    const oldDueAt = state.progress[word.id]?.dueAt ?? null;
+    const oldDueAt = spellingProgress(word.id)?.dueAt ?? null;
     const answer = collectPracticeAnswer(word);
     if (answer.hasBlank) {
       toast(isCoreDay() ? "Fill every letter box first." : "还有字母格没有填完", "✎");
@@ -3372,7 +3475,7 @@
       };
 
       const stepBonus = task.source === "review"
-        ? 4 + Math.min(12, (state.progress[word.id]?.step || 0) * 2)
+        ? 4 + Math.min(12, (spellingProgress(word.id)?.step || 0) * 2)
         : task.source === "sprint" && task.sprintPhase === "drill"
           ? 4
           : task.source === "sprint" && task.sprintPhase === "final"
@@ -3409,7 +3512,7 @@
         nearMiss: Boolean(task.nearMissUsed),
         grade: reviewGrade,
         oldDueAt,
-        newDueAt: state.progress[word.id]?.dueAt ?? null
+        newDueAt: spellingProgress(word.id)?.dueAt ?? null
       });
       completeGoalIfReady();
       evaluateBadges();
@@ -3440,7 +3543,7 @@
       nearMiss: Boolean(nearCandidate),
       grade: nearCandidate ? "hard" : "again",
       oldDueAt,
-      newDueAt: state.progress[word.id]?.dueAt ?? null
+      newDueAt: spellingProgress(word.id)?.dueAt ?? null
     });
     saveState();
     render();
@@ -4232,6 +4335,7 @@
     semanticAlternativesFor,
     spellingAnswersFor,
     canonicalWordId,
+    lexemeIdForWord,
     sanitizeAttemptEvents,
     practiceCueType,
     practiceGradeForTask,
@@ -4260,6 +4364,7 @@
     sanitizeProgress,
     sanitizeProgressItem,
     nextReviewSchedule,
+    initialScheduleNeeded,
     isDue,
     sanitizeToday,
     mergeState,
