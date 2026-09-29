@@ -138,12 +138,17 @@ const attemptEvent = api.createAttemptEvent({
 assert.equal(attemptEvent.cardId, coreWord.id);
 assert.equal(attemptEvent.cueType, "image");
 assert.equal(attemptEvent.firstAttempt, true);
+assert.equal(attemptEvent.firstAttemptCorrect, true);
 assert.equal(attemptEvent.durationMs, 1_500);
 assert.equal(attemptEvent.grade, "good");
 assert.equal(attemptEvent.sequence, 7);
 assert.equal(api.sanitizeAttemptEvents([attemptEvent, attemptEvent]).length, 1, "attempt events deduplicate by eventId");
 assert.equal(api.practiceCueType({ mode: "full", usedAudio: true }, testWord), "audio-dictation");
 assert.equal(api.practiceCueType({ mode: "cloze" }, testWord), "partial-spelling");
+assert.equal(api.practiceGradeForTask({ attempts: 1, hadLapse: false, assisted: false, nearMissUsed: false }, true), "good");
+assert.equal(api.practiceGradeForTask({ attempts: 2, hadLapse: false, assisted: false, nearMissUsed: true }, true), "hard");
+assert.equal(api.practiceGradeForTask({ attempts: 2, hadLapse: true, assisted: false, nearMissUsed: false }, true), "again");
+assert.equal(api.practiceGradeForTask({ attempts: 1, hadLapse: false, assisted: true, nearMissUsed: false }, true), "again");
 
 const appSource = fs.readFileSync(path.join(__dirname, "..", "assets", "app.js"), "utf8");
 const practiceSource = appSource.slice(appSource.indexOf("function renderPractice()"), appSource.indexOf("function renderCoreExercise()"));
@@ -375,6 +380,17 @@ assert.equal(relearningProgress.dueAt, scheduleNow + 10 * 60 * 1000);
 assert.equal(relearningProgress.lapses, 1);
 assert.equal(relearningProgress.correct, longTermProgress.correct, "a lapse must not fabricate a successful recall");
 assert.equal(relearningProgress.lastSuccessAt, longTermProgress.lastSuccessAt, "relearning preserves earlier success history");
+
+const hardProgress = api.nextReviewSchedule({ ...longTermProgress, step: 6, dueAt: scheduleNow }, "hard", false, scheduleNow);
+assert.equal(hardProgress.step, 6, "Hard keeps the current stage instead of granting a Good advance");
+assert.equal(hardProgress.status, "mature");
+assert.equal(hardProgress.lastGrade, "hard");
+assert.equal(hardProgress.dueAt, new Date(2026, 10, 28, 8, 0, 0).getTime());
+
+const easyProgress = api.nextReviewSchedule({ ...longTermProgress, step: 5, dueAt: scheduleNow }, "easy", false, scheduleNow);
+assert.equal(easyProgress.step, 7, "Easy may skip one stage after verified independent recall");
+assert.equal(easyProgress.status, "mature");
+assert.equal(easyProgress.lastGrade, "easy");
 
 const overloadedProgress = {};
 const overloadedDueIds = Array.from({ length: 35 }, (_, index) => {

@@ -475,6 +475,7 @@
       dueAt,
       lastSuccessAt,
       lastReviewedAt: item.lastReviewedAt == null ? null : finiteNumber(item.lastReviewedAt, null, 0, 9_999_999_999_999),
+      lastGrade: ["again", "hard", "good", "easy"].includes(item.lastGrade) ? item.lastGrade : null,
       initialModesDone: Array.isArray(item.initialModesDone)
         ? [...new Set(item.initialModesDone.filter((mode) => mode === "cloze" || mode === "full"))]
         : []
@@ -805,6 +806,9 @@
         source: ["new", "review", "sprint", "pk"].includes(item.source) ? item.source : "new",
         cueType: ["image", "definition", "audio-dictation", "sentence", "translation", "partial-spelling"].includes(item.cueType) ? item.cueType : "image",
         firstAttempt: Boolean(item.firstAttempt),
+        firstAttemptCorrect: item.firstAttemptCorrect == null
+          ? Boolean(item.firstAttempt && item.answerCorrect)
+          : Boolean(item.firstAttemptCorrect),
         usedHint: Boolean(item.usedHint),
         answerShown: Boolean(item.answerShown),
         nearMiss: Boolean(item.nearMiss),
@@ -1865,7 +1869,7 @@
     }
   }
 
-  function nextReviewSchedule(existing, outcome = "correct", isInitial = false, now = Date.now()) {
+  function nextReviewSchedule(existing, outcome = "good", isInitial = false, now = Date.now()) {
     const progress = {
       ...(existing || {
       status: "learning",
@@ -1877,23 +1881,28 @@
       initialModesDone: []
       })
     };
+    const grade = ["again", "hard", "good", "easy"].includes(outcome)
+      ? outcome
+      : outcome === "correct" ? "good" : "again";
     const currentStep = safeInteger(progress.step, 0, 0, REVIEW_DELAYS.length - 1);
     let step = isInitial ? 0 : currentStep;
-    if (!isInitial && outcome === "correct") step = Math.min(REVIEW_DELAYS.length - 1, currentStep + 1);
-    if (!isInitial && outcome !== "correct") {
+    if (!isInitial && grade === "good") step = Math.min(REVIEW_DELAYS.length - 1, currentStep + 1);
+    if (!isInitial && grade === "easy") step = Math.min(REVIEW_DELAYS.length - 1, currentStep + 2);
+    if (!isInitial && grade === "again") {
       step = 0;
       progress.lapses = (progress.lapses || 0) + 1;
     }
 
     const delay = REVIEW_DELAYS[step];
-    progress.status = outcome !== "correct" && !isInitial
+    progress.status = grade === "again" && !isInitial
       ? "relearning"
       : step >= MATURE_STEP ? "mature" : "reviewing";
     progress.step = step;
     progress.scheduleVersion = REVIEW_SCHEDULE_VERSION;
     progress.dueAt = delay.ms ? now + delay.ms : addLocalDays(now, delay.days);
     progress.lastReviewedAt = now;
-    if (isInitial || outcome === "correct") {
+    progress.lastGrade = isInitial ? "good" : grade;
+    if (isInitial || grade !== "again") {
       progress.lastSuccessAt = now;
       progress.correct = (progress.correct || 0) + 1;
     }
@@ -1901,7 +1910,7 @@
     return progress;
   }
 
-  function scheduleWord(wordId, outcome = "correct", isInitial = false) {
+  function scheduleWord(wordId, outcome = "good", isInitial = false) {
     state.progress[wordId] = nextReviewSchedule(state.progress[wordId], outcome, isInitial);
   }
 
@@ -3285,6 +3294,7 @@
       source: ["new", "review", "sprint"].includes(task.source) ? task.source : "new",
       cueType: practiceCueType(task, word),
       firstAttempt: task.attempts === 1,
+      firstAttemptCorrect: task.attempts === 1 && Boolean(details.answerCorrect),
       usedHint: Boolean(task.assisted || task.hintIndices?.length),
       answerShown: Boolean(details.answerShown),
       nearMiss: Boolean(details.nearMiss),
@@ -3307,6 +3317,13 @@
     state.attemptEvents.push(event);
     details.task.attemptStartedAt = Date.now();
     return event;
+  }
+
+  function practiceGradeForTask(task, answerCorrect = true) {
+    if (!answerCorrect) return task?.nearMissUsed && !task?.hadLapse ? "hard" : "again";
+    if (task?.hadLapse || task?.assisted || task?.hintIndices?.length) return "again";
+    if (task?.nearMissUsed) return "hard";
+    return "good";
   }
 
   function gradePractice() {
@@ -3333,6 +3350,7 @@
     if (spellingAnswers.includes(answer.value)) {
       task.errorIndices = [];
       const cleanFirstTry = task.attempts === 1 && !task.hadLapse && !task.assisted && !task.nearMissUsed;
+      const reviewGrade = practiceGradeForTask(task, true);
       task.cleanPass = cleanFirstTry;
       if (cleanFirstTry) state.stats.combo += 1;
       else if (task.hadLapse) state.stats.combo = 0;
@@ -3372,7 +3390,7 @@
       award(awardId, points, cleanFirstTry ? 3 : 1, isCoreDay() ? (cleanFirstTry ? "First-try spelling" : "Spelling recovered") : cleanFirstTry ? "一次拼对" : "坚持追回");
 
       if (task.source === "review") {
-        scheduleWord(word.id, task.hadLapse || task.assisted ? "lapse" : "correct", false);
+        scheduleWord(word.id, reviewGrade, false);
         if (!state.today.reviewDoneIds.includes(word.id)) state.today.reviewDoneIds.push(word.id);
         state.stats.reviewed += 1;
       } else if (task.source === "new" && cleanFirstTry) {
@@ -3387,9 +3405,9 @@
         task,
         word,
         answerCorrect: true,
-        answerShown: false,
-        nearMiss: false,
-        grade: cleanFirstTry ? "good" : "again",
+        answerShown: Boolean(task.hadLapse),
+        nearMiss: Boolean(task.nearMissUsed),
+        grade: reviewGrade,
         oldDueAt,
         newDueAt: state.progress[word.id]?.dueAt ?? null
       });
@@ -4216,6 +4234,7 @@
     canonicalWordId,
     sanitizeAttemptEvents,
     practiceCueType,
+    practiceGradeForTask,
     createAttemptEvent,
     selectAmericanVoice,
     buildStudySpeechSequence,
