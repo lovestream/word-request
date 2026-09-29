@@ -837,6 +837,8 @@ def enrich_entry(
         "id": make_id(level, entry["headword"]),
         "word": canonical,
         "acceptedAnswers": forms[1:],
+        "semanticAlternatives": forms[1:],
+        "spellingVariants": [],
         "officialHeadword": entry["headword"],
         "official": True,
         "officialSource": f"Cambridge {SOURCES[level]['cefr']} Vocabulary List, August 2025",
@@ -881,6 +883,9 @@ def merge_same_spelling_cards(items: list[dict[str, Any]]) -> list[dict[str, Any
         ))
         target["acceptedAnswers"] = list(dict.fromkeys(
             target.get("acceptedAnswers", []) + item.get("acceptedAnswers", [])
+        ))
+        target["semanticAlternatives"] = list(dict.fromkeys(
+            target.get("semanticAlternatives", []) + item.get("semanticAlternatives", [])
         ))
         target["pos"] = list(dict.fromkeys(target.get("pos", []) + item.get("pos", [])))
         target["sourcePages"] = sorted(set(target.get("sourcePages", []) + item.get("sourcePages", [])))
@@ -962,6 +967,8 @@ def write_javascript(path: Path, banks: dict[str, list[dict[str, Any]]], metadat
         sourcePages: item.sourcePages,
         pos: item.pos,
         acceptedAnswers: [...new Set([...(item.acceptedAnswers || []), ...(rich.acceptedAnswers || [])])],
+        semanticAlternatives: [...new Set([...(item.semanticAlternatives || item.acceptedAnswers || []), ...(rich.semanticAlternatives || rich.acceptedAnswers || [])])],
+        spellingVariants: [...new Set([...(item.spellingVariants || []), ...(rich.spellingVariants || [])])],
         dataQuality: item.dataQuality
       }};
     }});

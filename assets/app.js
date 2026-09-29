@@ -1835,7 +1835,7 @@
 
   function makeMask(word, seed, mode) {
     const chars = [...word.toLowerCase()];
-    const letterIndices = chars.map((char, index) => (/^[a-z]$/i.test(char) ? index : -1)).filter((index) => index >= 0);
+    const letterIndices = chars.map((char, index) => (isPracticeLetter(char) ? index : -1)).filter((index) => index >= 0);
     if (mode === "full") return new Set(letterIndices);
     const candidates = letterIndices.filter((index) => {
       if (letterIndices.length < 4) return true;
@@ -1851,10 +1851,14 @@
     const canonicalChars = [...normalizeAnswer(canonical)];
     if (candidateChars.length !== canonicalChars.length) return false;
     return canonicalChars.every((char, index) => {
-      if (!/^[a-z]$/i.test(char)) return candidateChars[index] === char;
+      if (!isPracticeLetter(char)) return candidateChars[index] === char;
       if (!mask.has(index) || lockedIndices.has(index)) return candidateChars[index] === char;
-      return /^[a-z]$/i.test(candidateChars[index] || "");
+      return isPracticeLetter(candidateChars[index] || "");
     });
+  }
+
+  function isPracticeLetter(value) {
+    return /^\p{L}$/u.test(String(value || ""));
   }
 
   function normalizeAnswer(value) {
@@ -1885,6 +1889,17 @@
   function answerFormsFor(word) {
     return [...new Set([word?.word, ...(Array.isArray(word?.acceptedAnswers) ? word.acceptedAnswers : [])]
       .flatMap((form) => [...spellingVariants(form)]))];
+  }
+
+  function semanticAlternativesFor(word) {
+    const values = Array.isArray(word?.semanticAlternatives) ? word.semanticAlternatives : word?.acceptedAnswers;
+    return [...new Set((Array.isArray(values) ? values : []).map(normalizeAnswer).filter(Boolean))];
+  }
+
+  function spellingAnswersFor(word) {
+    return [...new Set([word?.word, ...(Array.isArray(word?.spellingVariants) ? word.spellingVariants : [])]
+      .map(normalizeAnswer)
+      .filter(Boolean))];
   }
 
   function clueContainsAnswer(clue, word) {
@@ -2502,11 +2517,11 @@
         ? `考试冲刺 · DAY ${state.today.sprint.day} · ${sprintPhaseMeta(task.sprintPhase).title}`
         : "今日新词 · 拼写训练";
     const letters = [...word.word.toLowerCase()].map((char, index) => {
-      if (!/^[a-z]$/i.test(char)) return `<span class="letter-fixed">${escapeHtml(char)}</span>`;
+      if (!isPracticeLetter(char)) return `<span class="letter-fixed">${escapeHtml(char)}</span>`;
       if (!mask.has(index)) return `<span class="letter-fixed" data-index="${index}">${char}</span>`;
       const isHinted = (task.hintIndices || []).includes(index);
       const draftLetter = task.draft?.[index] || "";
-      const value = isPassed || isHinted ? char : /^[a-z]$/i.test(draftLetter) ? draftLetter : "";
+      const value = isPassed || isHinted ? char : isPracticeLetter(draftLetter) ? draftLetter : "";
       const isError = !isPassed && !isHinted && (task.errorIndices || []).includes(index);
       return `<input class="letter-cell ${isPassed || isHinted ? "is-success" : ""} ${isError ? "is-error" : ""}" type="text" inputmode="text" maxlength="1" autocomplete="off" autocapitalize="none" spellcheck="false" aria-label="${coreEnglish ? `Letter ${index + 1}` : `第 ${index + 1} 个字母`}" data-index="${index}" value="${value}" ${isError ? `aria-invalid="true"` : ""} ${isPassed || isHinted ? "disabled" : ""} />`;
     }).join("");
@@ -2919,7 +2934,7 @@
     const length = Math.max(actualChars.length, expectedChars.length);
     const indices = [];
     for (let index = 0; index < length; index += 1) {
-      if (/^[a-z]$/i.test(expectedChars[index] || "") && actualChars[index] !== expectedChars[index]) {
+      if (isPracticeLetter(expectedChars[index] || "") && actualChars[index] !== expectedChars[index]) {
         indices.push(index);
       }
     }
@@ -2939,17 +2954,14 @@
 
     const activeMask = makeMask(word.word, task.maskSeed, task.mode);
     const lockedIndices = new Set(task.hintIndices || []);
-    const acceptedAnswers = [...new Set(
-      [word.word, ...(Array.isArray(word.acceptedAnswers) ? word.acceptedAnswers : [])]
-        .map(normalizeAnswer)
-        .filter((candidate) => candidate && canEnterPracticeAnswer(candidate, word.word, activeMask, lockedIndices))
-    )];
+    const spellingAnswers = spellingAnswersFor(word)
+      .filter((candidate) => canEnterPracticeAnswer(candidate, word.word, activeMask, lockedIndices));
     const expected = normalizeAnswer(word.word);
     task.draft = answer.draft;
     state.stats.attempts += 1;
     task.attempts += 1;
 
-    if (acceptedAnswers.includes(answer.value)) {
+    if (spellingAnswers.includes(answer.value)) {
       task.errorIndices = [];
       const cleanFirstTry = task.attempts === 1 && !task.hadLapse && !task.assisted && !task.nearMissUsed;
       task.cleanPass = cleanFirstTry;
@@ -3010,7 +3022,7 @@
     }
 
     const nearCandidate = state.settings.typoAssist && expected.length >= 4 && !task.nearMissUsed
-      ? acceptedAnswers.find((candidate) => damerauDistanceOne(answer.value, candidate) === 1)
+      ? spellingAnswers.find((candidate) => damerauDistanceOne(answer.value, candidate) === 1)
       : null;
     if (nearCandidate) {
       task.nearMissUsed = true;
@@ -3448,8 +3460,8 @@
       toast("先写出你想到的英文单词", "✎");
       return;
     }
-    const acceptedAnswers = [word.word, ...(Array.isArray(word.acceptedAnswers) ? word.acceptedAnswers : [])].map(normalizeAnswer);
-    if (acceptedAnswers.includes(value)) {
+    const spellingAnswers = spellingAnswersFor(word);
+    if (spellingAnswers.includes(value)) {
       game.kevin += 100;
       game.index += 1;
       toast("命中！+100 分", "⚡");
@@ -3806,6 +3818,9 @@
     hashString,
     seededShuffle,
     normalizeAnswer,
+    isPracticeLetter,
+    semanticAlternativesFor,
+    spellingAnswersFor,
     canonicalWordId,
     selectAmericanVoice,
     buildStudySpeechSequence,

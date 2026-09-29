@@ -402,6 +402,8 @@ def build_data(manifest: list[dict]) -> dict:
                 "id": word_id,
                 "word": parsed["word"],
                 "acceptedAnswers": [],
+                "semanticAlternatives": [],
+                "spellingVariants": [],
                 "en": parsed["definition"],
                 "zh": "",
                 "ipa": parsed["ipa"],

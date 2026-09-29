@@ -19,6 +19,8 @@ const testWord = {
   id: "ket:test",
   word: "truck",
   acceptedAnswers: ["lorry"],
+  semanticAlternatives: ["lorry"],
+  spellingVariants: [],
   en: "a large road vehicle",
   zh: "卡车",
   visual: {},
@@ -110,13 +112,22 @@ assert.equal(api.quizClueFor({ word: "blood", quizClue: "Blood is the red liquid
 assert.equal(api.quizClueFor({ word: "truck", acceptedAnswers: ["lorry"], quizClue: "A large road vehicle for carrying goods." }), "A large road vehicle for carrying goods.");
 assert.equal(api.quizClueFor({ word: "truck", acceptedAnswers: ["lorry"], quizClue: "Another word for a lorry." }), "", "accepted answers must also stay out of quiz clues");
 assert.equal(api.quizClueFor({ word: "website", quizClue: "Websites can contain many pages." }), "", "common inflections must not reveal the target");
+assert.deepEqual(Array.from(api.semanticAlternativesFor(testWord)), ["lorry"]);
+assert.deepEqual(Array.from(api.spellingAnswersFor(testWord)), ["truck"], "a synonym must not pass a target-word spelling test");
+assert.deepEqual(Array.from(api.spellingAnswersFor({ word: "colour", spellingVariants: ["color"] })), ["colour", "color"]);
+assert.equal(api.isPracticeLetter("é"), true, "accented English loanwords must remain typeable");
+assert.equal(api.isPracticeLetter("-"), false);
 
 const appSource = fs.readFileSync(path.join(__dirname, "..", "assets", "app.js"), "utf8");
 const practiceSource = appSource.slice(appSource.indexOf("function renderPractice()"), appSource.indexOf("function renderCoreExercise()"));
 const pkSource = appSource.slice(appSource.indexOf("function renderPkGame()"), appSource.indexOf("function submitPk()"));
+const gradeSource = appSource.slice(appSource.indexOf("function gradePractice()"), appSource.indexOf("function advancePractice()"));
+const submitPkSource = appSource.slice(appSource.indexOf("function submitPk()"), appSource.indexOf("function finishPk()"));
 assert.doesNotMatch(practiceSource, /data-word=/, "pre-answer spelling DOM must not carry the complete answer");
 assert.doesNotMatch(practiceSource, /word\.en/, "original study definitions must never render as pre-answer clues");
 assert.doesNotMatch(pkSource, /word\.en/, "PK must not use an answer-bearing Core definition");
+assert.doesNotMatch(gradeSource, /acceptedAnswers/, "semantic alternatives must not pass spelling practice");
+assert.doesNotMatch(submitPkSource, /acceptedAnswers/, "semantic alternatives must not pass spelling PK");
 assert.match(practiceSource, /aria-label="\$\{coreEnglish \? "Book picture clue" : "单词图片提示"\}"/);
 
 assert.deepEqual(
