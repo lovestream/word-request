@@ -376,6 +376,29 @@ assert.equal(relearningProgress.lapses, 1);
 assert.equal(relearningProgress.correct, longTermProgress.correct, "a lapse must not fabricate a successful recall");
 assert.equal(relearningProgress.lastSuccessAt, longTermProgress.lastSuccessAt, "relearning preserves earlier success history");
 
+const overloadedProgress = {};
+const overloadedDueIds = Array.from({ length: 35 }, (_, index) => {
+  const id = `word-${String(index + 1).padStart(2, "0")}`;
+  overloadedProgress[id] = {
+    status: index === 34 ? "relearning" : "reviewing",
+    step: index === 34 ? 0 : 3,
+    lapses: index === 20 ? 2 : 0,
+    dueAt: scheduleNow - (index + 1) * 60_000
+  };
+  return id;
+});
+const overloadedPlan = api.buildDailyPlan(overloadedDueIds, overloadedProgress, 10);
+assert.equal(overloadedPlan.dueAllIds.length, 35);
+assert.equal(overloadedPlan.plannedReviewIds.length, 25, "daily review work must be capped");
+assert.equal(overloadedPlan.reviewBacklogIds.length, 10, "unplanned due cards must remain visible as backlog");
+assert.equal(overloadedPlan.newLimit, 0, "more than 30 due cards must create a review-only day");
+assert.ok(overloadedPlan.estimatedMinutes <= 20, "the initial plan estimate must respect the time budget");
+assert.equal(overloadedPlan.plannedReviewIds[0], "word-35", "a relearning card must be scheduled before ordinary overdue cards");
+
+const moderatePlan = api.buildDailyPlan(overloadedDueIds.slice(0, 20), overloadedProgress, 10);
+assert.ok(moderatePlan.newLimit >= 5 && moderatePlan.newLimit <= 8, "11-20 due cards should reduce but not eliminate new words");
+assert.ok(moderatePlan.estimatedMinutes <= 20);
+
 const baseBackup = {
   schemaVersion: 1,
   settings: {
@@ -415,6 +438,33 @@ const baseBackup = {
 const merged = api.mergeState(baseBackup, true);
 assert.equal(merged.today.tasks.length, 1, "semantic duplicate review tasks must collapse");
 assert.equal(merged.today.tasks[0].id, "review:ket:test:4:full");
+assert.equal(merged.today.planVersion, 1);
+assert.deepEqual(Array.from(merged.today.plannedReviewIds), ["ket:test"]);
+
+const frozenPlan = api.mergeState({
+  ...baseBackup,
+  progress: {
+    ...baseBackup.progress,
+    "core2000:test": {
+      status: "reviewing",
+      learnedAt: 10,
+      step: 1,
+      scheduleToken: 2,
+      dueAt: Date.now() - 500
+    }
+  },
+  today: {
+    ...baseBackup.today,
+    planVersion: 1,
+    dueAllIds: ["ket:test", "core2000:test"],
+    plannedReviewIds: ["ket:test"],
+    reviewBacklogIds: ["core2000:test"],
+    baselineDueIds: ["ket:test"]
+  }
+}, true);
+assert.deepEqual(Array.from(frozenPlan.today.plannedReviewIds), ["ket:test"]);
+assert.equal(frozenPlan.today.plannedReviewIds.includes("core2000:test"), false, "a later due card must not expand today's frozen plan");
+assert.deepEqual(Array.from(frozenPlan.today.reviewBacklogIds), ["core2000:test"]);
 
 const duplicateNewBackup = {
   ...baseBackup,

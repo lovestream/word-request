@@ -14,6 +14,11 @@
   const SPRINT_SIZE = 30;
   const REVIEW_SCHEDULE_VERSION = 2;
   const MATURE_STEP = 6;
+  const DAILY_PLAN_VERSION = 1;
+  const DAILY_REVIEW_CAP = 25;
+  const DAILY_TIME_BUDGET_MINUTES = 20;
+  const REVIEW_ESTIMATE_MINUTES = 0.55;
+  const NEW_WORD_ESTIMATE_MINUTES = 1.4;
   const REVIEW_DELAYS = [
     { label: "10 分钟", ms: 10 * 60 * 1000, icon: "⏱" },
     { label: "1 天", days: 1, icon: "🌱" },
@@ -233,6 +238,15 @@
 
   function coreExerciseIsComplete(day = state?.today) {
     return Boolean(day?.coreExerciseId && coreExerciseRecord(day.coreExerciseId)?.completedAt);
+  }
+
+  function coreBatchReadyForExercise(day = state?.today) {
+    if (!isCoreDay(day)) return false;
+    const batch = coreBatchById(day.coreBatchId);
+    return Boolean(batch?.wordIds?.length && batch.wordIds.every((id) => {
+      const progress = state.progress[id];
+      return progress?.dueAt && progress.initialModesDone?.includes("cloze") && progress.initialModesDone?.includes("full");
+    }));
   }
 
   function orderedBankWords(bankKey) {
@@ -580,13 +594,59 @@
     const isSprint = practiceMode === "sprint";
     const sprint = isSprint ? sanitizeSprintState(rawToday.sprint, bank, sprintDayFor(bank, settings)) : null;
     const allowedNewIds = bankWordIds(bank);
-    const newIds = isSprint
+    const rawNewIds = isSprint
       ? [...sprint.wordIds]
       : safeWordIds(rawToday.newIds).filter((id) => allowedNewIds.has(id));
+    const rawDueAllIds = safeWordIds([
+      ...(rawToday.dueAllIds || []),
+      ...(rawToday.baselineDueIds || []),
+      ...(rawToday.dueIds || []),
+      ...(rawToday.reviewBacklogIds || [])
+    ]).filter((id) => Boolean(progress[id]));
+    const generatedPlan = buildDailyPlan(rawDueAllIds, progress, settings.dailyGoal);
+    const hasFrozenPlan = safeInteger(rawToday.planVersion, 0, 0, DAILY_PLAN_VERSION) === DAILY_PLAN_VERSION;
+    const plannedReviewIds = isSprint
+      ? []
+      : hasFrozenPlan
+        ? safeWordIds(rawToday.plannedReviewIds || rawToday.baselineDueIds || rawToday.dueIds).filter((id) => Boolean(progress[id]))
+        : generatedPlan.plannedReviewIds;
+    const plannedReviewSet = new Set(plannedReviewIds);
+    const dueAllIds = [...new Set([...rawDueAllIds, ...plannedReviewIds])];
+    const reviewBacklogIds = isSprint
+      ? dueAllIds
+      : [...new Set([
+        ...safeWordIds(rawToday.reviewBacklogIds).filter((id) => Boolean(progress[id])),
+        ...dueAllIds.filter((id) => !plannedReviewSet.has(id))
+      ])];
+    const protectedNewIds = new Set([
+      ...safeWordIds(rawToday.learnedIds),
+      ...safeWordIds(rawToday.practicedIds),
+      ...(Array.isArray(rawToday.tasks)
+        ? rawToday.tasks.filter((task) => task?.source === "new" && (task.status !== "queued" || safeInteger(task.attempts, 0) > 0)).map((task) => task.wordId)
+        : [])
+    ]);
+    const frozenNewLimit = isSprint
+      ? rawNewIds.length
+      : hasFrozenPlan
+        ? safeInteger(rawToday.newLimit, rawNewIds.length, 0, 50)
+        : generatedPlan.newLimit;
+    const protectedPlannedIds = rawNewIds.filter((id) => protectedNewIds.has(id));
+    const newIds = isSprint || hasFrozenPlan
+      ? rawNewIds
+      : [...new Set([
+        ...protectedPlannedIds,
+        ...rawNewIds.filter((id) => !protectedNewIds.has(id)).slice(0, Math.max(0, frozenNewLimit - protectedPlannedIds.length))
+      ])];
+    const deferredNewIds = isSprint
+      ? []
+      : [...new Set([
+        ...safeWordIds(rawToday.deferredNewIds).filter((id) => allowedNewIds.has(id)),
+        ...rawNewIds.filter((id) => !newIds.includes(id))
+      ])];
     const newIdSet = new Set(newIds);
     const learnedIds = safeWordIds(rawToday.learnedIds).filter((id) => newIdSet.has(id));
     const learnedIdSet = new Set(learnedIds);
-    const dueIds = safeWordIds(rawToday.dueIds).filter((id) => Boolean(progress[id]));
+    const dueIds = [...plannedReviewIds];
     const dueIdSet = new Set(dueIds);
     const allowedNewModes = new Set(practiceMode === "mixed" ? ["cloze", "full"] : [practiceMode]);
     const reviewMode = practiceMode === "cloze" ? "cloze" : "full";
@@ -653,17 +713,31 @@
     return {
       date: rawToday.date,
       bank,
-      goal: isSprint ? Math.max(1, sprint.wordIds.length) : safeInteger(rawToday.goal, settings.dailyGoal, 1, 50),
+      goal: isSprint ? Math.max(1, sprint.wordIds.length) : newIds.length,
       practiceMode,
       sprint,
       coreBatchId: bank === "core2000" && coreBatchById(rawToday.coreBatchId) ? rawToday.coreBatchId : null,
       coreExerciseId: bank === "core2000" && (coreCourse().batches || []).some((batch) => batch.exercise?.id === rawToday.coreExerciseId) ? rawToday.coreExerciseId : null,
+      planVersion: DAILY_PLAN_VERSION,
+      plannedAt: finiteNumber(rawToday.plannedAt, Date.now(), 0, 9_999_999_999_999),
+      dueAllIds,
+      plannedReviewIds: dueIds,
+      reviewBacklogIds,
+      reviewCapacity: DAILY_REVIEW_CAP,
+      newLimit: frozenNewLimit,
+      estimatedMinutes: safeInteger(
+        rawToday.estimatedMinutes,
+        Math.min(DAILY_TIME_BUDGET_MINUTES, Math.ceil(dueIds.length * REVIEW_ESTIMATE_MINUTES + newIds.length * NEW_WORD_ESTIMATE_MINUTES)),
+        0,
+        180
+      ),
       newIds,
+      deferredNewIds,
       carryoverIds: isSprint ? [] : safeWordIds(rawToday.carryoverIds).filter((id) => newIdSet.has(id)),
       learnedIds,
       practicedIds: safeWordIds(rawToday.practicedIds).filter((id) => newIdSet.has(id)),
       dueIds,
-      baselineDueIds: safeWordIds(rawToday.baselineDueIds || rawToday.dueIds).filter((id) => Boolean(progress[id])),
+      baselineDueIds: dueIds,
       reviewDoneIds: safeWordIds(rawToday.reviewDoneIds).filter((id) => Boolean(progress[id])),
       studyCursor: safeInteger(rawToday.studyCursor, 0, 0, 10_000),
       tasks,
@@ -1089,6 +1163,50 @@
     return [...new Set(dueIds)].filter((id) => allowedIds.has(id) && !excluded.has(id));
   }
 
+  function reviewQueuePriority(id, progress = {}) {
+    const item = progress[id] || {};
+    const shortTerm = item.status === "relearning" || safeInteger(item.step, 0, 0, 99) <= 1 ? 0 : 1;
+    const fragile = safeInteger(item.lapses, 0, 0, 1_000_000) > 0 ? 0 : 1;
+    return [shortTerm, fragile, finiteNumber(item.dueAt, Number.MAX_SAFE_INTEGER, 0, Number.MAX_SAFE_INTEGER), String(id)];
+  }
+
+  function compareReviewPriority(leftId, rightId, progress = {}) {
+    const left = reviewQueuePriority(leftId, progress);
+    const right = reviewQueuePriority(rightId, progress);
+    for (let index = 0; index < left.length; index += 1) {
+      if (left[index] < right[index]) return -1;
+      if (left[index] > right[index]) return 1;
+    }
+    return 0;
+  }
+
+  function dailyNewLimit(dueCount, requestedNew, reviewCount = Math.min(dueCount, DAILY_REVIEW_CAP)) {
+    const requested = Math.min(10, Math.max(0, safeInteger(requestedNew, 10, 0, 50)));
+    const thresholdLimit = dueCount > 30 ? 0 : dueCount > 20 ? 5 : dueCount > 10 ? 8 : 10;
+    const remainingMinutes = Math.max(0, DAILY_TIME_BUDGET_MINUTES - reviewCount * REVIEW_ESTIMATE_MINUTES);
+    const timeLimit = Math.floor(remainingMinutes / NEW_WORD_ESTIMATE_MINUTES);
+    return Math.max(0, Math.min(requested, thresholdLimit, timeLimit));
+  }
+
+  function buildDailyPlan(dueIds, progress = {}, requestedNew = 10) {
+    const dueAllIds = [...new Set(Array.isArray(dueIds) ? dueIds.filter((id) => typeof id === "string") : [])]
+      .sort((left, right) => compareReviewPriority(left, right, progress));
+    const plannedReviewIds = dueAllIds.slice(0, DAILY_REVIEW_CAP);
+    const reviewBacklogIds = dueAllIds.slice(plannedReviewIds.length);
+    const newLimit = dailyNewLimit(dueAllIds.length, requestedNew, plannedReviewIds.length);
+    const estimatedMinutes = Math.ceil(
+      plannedReviewIds.length * REVIEW_ESTIMATE_MINUTES + newLimit * NEW_WORD_ESTIMATE_MINUTES
+    );
+    return {
+      dueAllIds,
+      plannedReviewIds,
+      reviewBacklogIds,
+      reviewCapacity: DAILY_REVIEW_CAP,
+      newLimit,
+      estimatedMinutes: Math.min(DAILY_TIME_BUDGET_MINUTES, estimatedMinutes)
+    };
+  }
+
   function masteredCount(source = state) {
     return Object.values(source.progress || {}).filter((item) => item.status === "mature").length;
   }
@@ -1169,21 +1287,38 @@
     resetTransientRuntime();
     if (state.settings.bank === "core2000") {
       const batch = coreBatchInfo(state.settings.coreBatch);
-      const dueIds = coreDueIds(Date.now(), batch?.wordIds || []);
+      const dueAllIds = coreDueIds(Date.now());
+      const plan = buildDailyPlan(dueAllIds, state.progress, state.settings.dailyGoal);
+      const pendingSetIds = (batch?.wordIds || []).filter((id) => {
+        const progress = state.progress[id];
+        return !progress?.dueAt && (!progress?.learnedAt || progress.status === "learning");
+      });
+      const newIds = pendingSetIds.slice(0, plan.newLimit);
+      const deferredNewIds = pendingSetIds.slice(newIds.length);
+      const carryoverIds = newIds.filter((id) => state.progress[id]?.learnedAt);
       state.today = {
         date: todayKey,
         bank: "core2000",
-        goal: batch?.wordIds.length || 10,
+        goal: newIds.length,
         practiceMode: "mixed",
         sprint: null,
         coreBatchId: batch?.id || null,
         coreExerciseId: batch?.exercise?.id || null,
-        newIds: [...(batch?.wordIds || [])],
-        carryoverIds: [],
-        learnedIds: [],
+        planVersion: DAILY_PLAN_VERSION,
+        plannedAt: Date.now(),
+        dueAllIds: plan.dueAllIds,
+        plannedReviewIds: plan.plannedReviewIds,
+        reviewBacklogIds: plan.reviewBacklogIds,
+        reviewCapacity: plan.reviewCapacity,
+        newLimit: plan.newLimit,
+        estimatedMinutes: Math.min(DAILY_TIME_BUDGET_MINUTES, Math.ceil(plan.plannedReviewIds.length * REVIEW_ESTIMATE_MINUTES + newIds.length * NEW_WORD_ESTIMATE_MINUTES)),
+        newIds,
+        deferredNewIds,
+        carryoverIds,
+        learnedIds: [...carryoverIds],
         practicedIds: [],
-        dueIds,
-        baselineDueIds: [...dueIds],
+        dueIds: [...plan.plannedReviewIds],
+        baselineDueIds: [...plan.plannedReviewIds],
         reviewDoneIds: [],
         studyCursor: 0,
         tasks: [],
@@ -1201,7 +1336,7 @@
       const bank = state.settings.bank;
       const sprintDay = sprintDayFor(bank);
       const sprint = newSprintState(bank, sprintDay);
-      const dueIds = getDueIds();
+      const dueAllIds = getDueIds();
       state.settings.sprintDays[bank] = sprint.day;
       state.today = {
         date: todayKey,
@@ -1209,11 +1344,20 @@
         goal: sprint.wordIds.length,
         practiceMode: "sprint",
         sprint,
+        planVersion: DAILY_PLAN_VERSION,
+        plannedAt: Date.now(),
+        dueAllIds,
+        plannedReviewIds: [],
+        reviewBacklogIds: [...dueAllIds],
+        reviewCapacity: DAILY_REVIEW_CAP,
+        newLimit: sprint.wordIds.length,
+        estimatedMinutes: 0,
         newIds: [...sprint.wordIds],
+        deferredNewIds: [],
         carryoverIds: [],
         learnedIds: [],
         practicedIds: [],
-        dueIds,
+        dueIds: [],
         baselineDueIds: [],
         reviewDoneIds: [],
         studyCursor: 0,
@@ -1252,27 +1396,39 @@
       : rawCarryover;
     const carryLearned = carryover.filter((id) => state.progress[id]?.learnedAt);
     const unseen = bankWords.filter((word) => !state.progress[word.id]?.learnedAt && !carryover.includes(word.id));
-    const slots = Math.max(0, state.settings.dailyGoal - carryover.length);
+    const dueAllIds = getDueIds();
+    const plan = buildDailyPlan(dueAllIds, state.progress, state.settings.dailyGoal);
+    const plannedCarryover = carryover.slice(0, plan.newLimit);
+    const slots = Math.max(0, plan.newLimit - plannedCarryover.length);
     const selectedPool = state.settings.bank === "movers"
       ? sortMoversWords(unseen)
       : seededShuffle(unseen, `kevin:${todayKey}:${state.settings.bank}`);
     const selected = selectedPool.slice(0, slots).map((word) => word.id);
-    const dueIds = getDueIds();
+    const newIds = [...plannedCarryover, ...selected];
 
     state.today = {
       date: todayKey,
       bank: state.settings.bank,
-      goal: state.settings.dailyGoal,
+      goal: newIds.length,
       practiceMode: state.settings.practiceMode,
       sprint: null,
-      newIds: [...carryover, ...selected],
-      carryoverIds: carryover,
-      learnedIds: carryLearned,
+      planVersion: DAILY_PLAN_VERSION,
+      plannedAt: Date.now(),
+      dueAllIds: plan.dueAllIds,
+      plannedReviewIds: plan.plannedReviewIds,
+      reviewBacklogIds: plan.reviewBacklogIds,
+      reviewCapacity: plan.reviewCapacity,
+      newLimit: plan.newLimit,
+      estimatedMinutes: Math.min(DAILY_TIME_BUDGET_MINUTES, Math.ceil(plan.plannedReviewIds.length * REVIEW_ESTIMATE_MINUTES + newIds.length * NEW_WORD_ESTIMATE_MINUTES)),
+      newIds,
+      deferredNewIds: carryover.filter((id) => !plannedCarryover.includes(id)),
+      carryoverIds: plannedCarryover,
+      learnedIds: carryLearned.filter((id) => newIds.includes(id)),
       practicedIds: [],
-      dueIds,
-      baselineDueIds: [...dueIds],
+      dueIds: [...plan.plannedReviewIds],
+      baselineDueIds: [...plan.plannedReviewIds],
       reviewDoneIds: [],
-      studyCursor: Math.min(carryLearned.length, Math.max(0, carryover.length + selected.length - 1)),
+      studyCursor: Math.min(carryLearned.length, Math.max(0, newIds.length - 1)),
       tasks: [],
       goalAwarded: false,
       completed: false,
@@ -1289,7 +1445,16 @@
       bank: state.settings.bank,
       goal: state.settings.dailyGoal,
       practiceMode: state.settings.practiceMode,
+      planVersion: DAILY_PLAN_VERSION,
+      plannedAt: Date.now(),
+      dueAllIds: [],
+      plannedReviewIds: [],
+      reviewBacklogIds: [],
+      reviewCapacity: DAILY_REVIEW_CAP,
+      newLimit: 0,
+      estimatedMinutes: 0,
       newIds: [],
+      deferredNewIds: [],
       carryoverIds: [],
       learnedIds: [],
       practicedIds: [],
@@ -1305,7 +1470,7 @@
       sessionMistakes: 0
     };
     state.today = { ...defaults, ...state.today };
-    for (const key of ["newIds", "carryoverIds", "learnedIds", "practicedIds", "dueIds", "baselineDueIds", "reviewDoneIds", "tasks"]) {
+    for (const key of ["dueAllIds", "plannedReviewIds", "reviewBacklogIds", "newIds", "deferredNewIds", "carryoverIds", "learnedIds", "practicedIds", "dueIds", "baselineDueIds", "reviewDoneIds", "tasks"]) {
       if (!Array.isArray(state.today[key])) state.today[key] = [];
     }
     state.today.bank = safeBank(state.today.bank, state.settings.bank);
@@ -1318,6 +1483,7 @@
       const sprintIds = new Set(state.today.sprint.wordIds);
       state.today.goal = state.today.sprint.wordIds.length;
       state.today.newIds = [...state.today.sprint.wordIds];
+      state.today.deferredNewIds = [];
       state.today.carryoverIds = [];
       state.today.learnedIds = [...new Set(state.today.learnedIds.filter((id) => sprintIds.has(id)))];
       state.today.practicedIds = [...new Set(state.today.practicedIds.filter((id) => sprintIds.has(id)))];
@@ -1348,13 +1514,21 @@
       state.today.sprint = null;
       state.today.coreBatchId = batch?.id || null;
       state.today.coreExerciseId = batch?.exercise?.id || null;
-      state.today.goal = batch?.wordIds.length || 10;
-      state.today.newIds = [...(batch?.wordIds || [])];
-      state.today.carryoverIds = [];
+      state.today.newIds = [...new Set(state.today.newIds.filter((id) => allowedIds.has(id)))];
+      state.today.goal = state.today.newIds.length;
+      const pendingSetIds = (batch?.wordIds || []).filter((id) => {
+        const progress = state.progress[id];
+        return !progress?.dueAt && (!progress?.learnedAt || progress.status === "learning");
+      });
+      state.today.deferredNewIds = [...new Set([
+        ...state.today.deferredNewIds.filter((id) => allowedIds.has(id)),
+        ...pendingSetIds.filter((id) => !state.today.newIds.includes(id))
+      ])];
+      state.today.carryoverIds = state.today.carryoverIds.filter((id) => state.today.newIds.includes(id));
       state.today.learnedIds = [...new Set(state.today.learnedIds.filter((id) => allowedIds.has(id)))];
       state.today.practicedIds = [...new Set(state.today.practicedIds.filter((id) => allowedIds.has(id)))];
-      const validCoreDueIds = new Set(coreDueIds(Date.now(), batch?.wordIds || []));
-      state.today.dueIds = [...new Set(state.today.dueIds.filter((id) => validCoreDueIds.has(id)))];
+      state.today.dueIds = [...new Set(state.today.dueIds.filter((id) => bankWordIds("core2000").has(id)))];
+      state.today.plannedReviewIds = [...state.today.dueIds];
       state.today.baselineDueIds = [...new Set(state.today.baselineDueIds.filter((id) => bankWordIds("core2000").has(id)))];
       state.today.tasks = state.today.tasks.filter((task) => task && (
         (task.source === "new" && allowedIds.has(task.wordId))
@@ -1377,9 +1551,7 @@
         );
       })
       .map((word) => word.id);
-    state.today.newIds.push(...missingBacklog);
-    state.today.carryoverIds = [...new Set([...state.today.carryoverIds, ...missingBacklog])];
-    state.today.learnedIds = [...new Set([...state.today.learnedIds, ...missingBacklog])];
+    state.today.deferredNewIds = [...new Set([...state.today.deferredNewIds, ...missingBacklog.filter((id) => !state.today.newIds.includes(id))])];
     let newIdSet = new Set(state.today.newIds);
     state.today.carryoverIds = state.today.carryoverIds.filter((id) => newIdSet.has(id));
     state.today.learnedIds = state.today.learnedIds.filter((id) => newIdSet.has(id));
@@ -1408,6 +1580,17 @@
       Math.min(state.today.studyCursor, Math.max(0, previousIds.length - 1))
     );
     const currentWordId = previousIds[previousCursor] || null;
+    if (state.today.planVersion === DAILY_PLAN_VERSION) {
+      state.today.newIds = sortMoversIds(previousIds);
+      state.today.deferredNewIds = sortMoversIds(state.today.deferredNewIds.filter((id) => moverIds.has(id) && !state.today.newIds.includes(id)));
+      state.today.carryoverIds = sortMoversIds(state.today.carryoverIds.filter((id) => state.today.newIds.includes(id)));
+      state.today.learnedIds = sortMoversIds(state.today.learnedIds.filter((id) => state.today.newIds.includes(id)));
+      state.today.practicedIds = sortMoversIds(state.today.practicedIds.filter((id) => state.today.newIds.includes(id)));
+      state.today.studyCursor = currentWordId && state.today.newIds.includes(currentWordId)
+        ? state.today.newIds.indexOf(currentWordId)
+        : Math.max(0, Math.min(state.today.studyCursor, Math.max(0, state.today.newIds.length - 1)));
+      return;
+    }
     const plannedIds = previousIds;
     const protectedIds = plannedIds.filter((id) =>
       state.today.learnedIds.includes(id)
@@ -1451,11 +1634,17 @@
   function syncDueTasks() {
     if (!state.today) return;
     const dueNow = isCoreDay()
-      ? coreDueIds(Date.now(), state.today.newIds)
+      ? coreDueIds(Date.now())
       : getDueIds();
-    for (const id of dueNow) {
-      if (!state.today.dueIds.includes(id) && !state.today.reviewDoneIds.includes(id)) state.today.dueIds.push(id);
-    }
+    const plannedSet = new Set(state.today.plannedReviewIds || state.today.dueIds);
+    state.today.dueIds = [...plannedSet];
+    state.today.baselineDueIds = [...plannedSet];
+    state.today.dueAllIds = [...new Set([...(state.today.dueAllIds || []), ...dueNow])];
+    state.today.reviewBacklogIds = state.today.dueAllIds.filter((id) =>
+      !plannedSet.has(id)
+      && !state.today.reviewDoneIds.includes(id)
+      && isDue(state.progress[id])
+    );
     syncPracticeTasks();
   }
 
@@ -1722,8 +1911,7 @@
     const isSprint = day.practiceMode === "sprint";
     const allNewDone = isSprint
       ? day.sprint?.phase === "complete" && day.sprint.wordIds.every((id) => day.practicedIds.includes(id))
-      : (day.newIds.length === 0 || day.newIds.every((id) => day.practicedIds.includes(id)))
-        && (!isCoreDay(day) || coreExerciseIsComplete(day));
+      : day.newIds.length === 0 || day.newIds.every((id) => day.practicedIds.includes(id));
     const baselineReviewsDone = isSprint
       ? true
       : day.baselineDueIds.every((id) => day.reviewDoneIds.includes(id) || !isDue(state.progress[id]));
@@ -2201,11 +2389,37 @@
       return { route: "practice", label: `继续${sprintPhaseMeta(sprint.phase).title}`, icon: sprintPhaseMeta(sprint.phase).icon };
     }
     const newDone = day.newIds.length === 0 || day.newIds.every((id) => day.practicedIds.includes(id));
-    const due = getDueIds().length;
+    const due = dailyPlanMetrics(day).reviewRemaining;
     if (day.newIds.length === 0 && due === 0) return { route: "books", label: "换一本词库", icon: "▤" };
     if (learned < day.newIds.length) return { route: "learn", label: learned ? "继续学习" : "出发学新词", icon: "✦" };
     if (!newDone || due) return { route: "practice", label: due && newDone ? "开始曲线复习" : "开始拼写训练", icon: "✎" };
     return { route: "review", label: "查看记忆地图", icon: "↻" };
+  }
+
+  function dailyPlanMetrics(day = state.today) {
+    const plannedReviewIds = day?.plannedReviewIds || day?.baselineDueIds || [];
+    const reviewDone = plannedReviewIds.filter((id) => day.reviewDoneIds?.includes(id) || !isDue(state.progress[id])).length;
+    const reviewRemaining = Math.max(0, plannedReviewIds.length - reviewDone);
+    const backlog = (day?.reviewBacklogIds || []).filter((id) => isDue(state.progress[id])).length;
+    return {
+      dueAll: reviewRemaining + backlog,
+      plannedReviews: plannedReviewIds.length,
+      reviewDone,
+      reviewRemaining,
+      backlog,
+      newWords: day?.newIds?.length || 0,
+      estimatedMinutes: safeInteger(day?.estimatedMinutes, 0, 0, 180)
+    };
+  }
+
+  function renderDailyPlanSummary(day = state.today, english = false) {
+    const plan = dailyPlanMetrics(day);
+    return `<div class="review-summary daily-plan-summary" aria-label="${english ? "Frozen daily learning plan" : "今日冻结学习计划"}">
+      <div class="review-stat-card"><strong>${plan.estimatedMinutes}</strong><span>${english ? "EST. MINUTES" : "预计分钟"}</span></div>
+      <div class="review-stat-card"><strong>${plan.plannedReviews}</strong><span>${english ? "PLANNED REVIEWS" : "计划旧词"}</span></div>
+      <div class="review-stat-card"><strong>${plan.newWords}</strong><span>${english ? "NEW WORDS" : "可学新词"}</span></div>
+      <div class="review-stat-card"><strong>${plan.backlog}</strong><span>${english ? "REVIEW BACKLOG" : "计划外积压"}</span></div>
+    </div>`;
   }
 
   function renderHome() {
@@ -2216,8 +2430,11 @@
     const learned = day.learnedIds.length;
     const total = day.newIds.length;
     const practiced = day.practicedIds.length;
-    const due = getDueIds().length;
-    const progressPercent = total ? Math.round((practiced / total) * 100) : 100;
+    const plan = dailyPlanMetrics(day);
+    const due = plan.reviewRemaining;
+    const workTotal = total + plan.plannedReviews;
+    const workDone = practiced + plan.reviewDone;
+    const progressPercent = workTotal ? Math.round((workDone / workTotal) * 100) : 100;
     const circumference = 276.46;
     const dashOffset = circumference * (1 - progressPercent / 100);
     const cta = homeCta();
@@ -2241,8 +2458,8 @@
         <section class="home-hero" aria-labelledby="hero-title">
           <div class="hero-copy">
             <span class="hero-kicker">${escapeHtml(bank.icon)} 当前地图 · ${escapeHtml(bank.short)}</span>
-            <h2 class="hero-title" id="hero-title">${day.completed ? "今天的探险，漂亮收官！" : `还差 <em>${remaining}</em> 个新发现`}</h2>
-            <p class="hero-subtitle">先看图认识单词，再拆开声音和词根，最后用拼写挑战把它稳稳装进记忆背包。</p>
+            <h2 class="hero-title" id="hero-title">${day.completed ? "今天的探险，漂亮收官！" : total ? `还差 <em>${remaining}</em> 个新发现` : due ? `今天先守住 <em>${due}</em> 个旧朋友` : "今天的合理计划已经清空"}</h2>
+            <p class="hero-subtitle">今日任务已经按 20 分钟左右冻结；积压不会偷偷加入，明天会继续平稳安排。</p>
             <div class="hero-actions">
               <button class="btn btn-primary" type="button" data-route="${cta.route}"><span>${cta.icon}</span>${cta.label}</button>
               <button class="btn btn-ghost" type="button" data-route="books">${escapeHtml(bank.name)} · 切换词库</button>
@@ -2254,10 +2471,12 @@
           </div>
         </section>
 
+        ${renderDailyPlanSummary(day)}
+
         <div class="home-grid">
           <section class="paper-card mission-card">
             <div class="card-head">
-              <div><h2>今日探险清单</h2><p>整批学习，再逐关巩固</p></div>
+              <div><h2>今日探险清单</h2><p>先复习，再按容量学习新词</p></div>
               <span class="book-tag">${escapeHtml(bank.icon)} ${escapeHtml(bank.name)}</span>
             </div>
             <div class="mission-progress">
@@ -2269,20 +2488,20 @@
                 <span class="ring-copy"><strong>${progressPercent}%</strong><small>完成度</small></span>
               </div>
               <div class="mission-steps">
-                ${missionStep("1", "看图学习", `${learned}/${total} 个单词`, learned >= total && total > 0)}
-                ${missionStep("2", "拼写闯关", `${practiceDone}/${Math.max(practiceTasks.length, total)} 关`, total > 0 && practiced >= total)}
-                ${missionStep("3", "曲线回访", due ? `${due} 个到期` : "暂时清空", due === 0)}
+                ${missionStep("1", "曲线回访", due ? `${plan.reviewDone}/${plan.plannedReviews} 个完成` : "今日计划已清", due === 0)}
+                ${missionStep("2", "看图学习", total ? `${learned}/${total} 个单词` : "今日 0 新词", total === 0 || learned >= total)}
+                ${missionStep("3", "拼写闯关", total ? `${practiceDone}/${Math.max(practiceTasks.length, total)} 关` : "今日 0 新词", total === 0 || practiced >= total)}
               </div>
             </div>
           </section>
 
           <section class="paper-card memory-card">
             <div class="card-head"><div><h2>记忆回访站</h2><p>按最佳时间回来，省力记得牢</p></div></div>
-            <div class="memory-count"><strong>${due}</strong><span>个单词<br />现在需要复习</span></div>
+            <div class="memory-count"><strong>${due}</strong><span>个旧词<br />还在今日计划</span></div>
             <div class="curve-preview" aria-hidden="true">
               ${REVIEW_DELAYS.slice(0, 5).map((delay, index) => `<span class="curve-dot ${index === 0 && due ? "is-active" : ""}">${index + 1}</span>`).join("")}
             </div>
-            <button class="btn ${due ? "btn-coral" : "btn-soft"}" type="button" data-route="review">${due ? "去复习，不让记忆溜走" : "看看记忆生长地图"}</button>
+            <button class="btn ${due ? "btn-coral" : "btn-soft"}" type="button" data-route="${due ? "practice" : "review"}">${due ? "完成今日旧词计划" : plan.backlog ? `另有 ${plan.backlog} 个积压，明天继续` : "看看记忆生长地图"}</button>
           </section>
         </div>
 
@@ -2300,36 +2519,36 @@
     const learned = day.learnedIds.length;
     const practiced = day.practicedIds.length;
     const exerciseDone = coreExerciseIsComplete(day);
-    const total = day.newIds.length || 10;
+    const exerciseAvailable = coreBatchReadyForExercise(day);
+    const total = day.newIds.length;
     const spellingTasks = day.tasks.filter((task) => task.source === "new");
     const spellingDone = spellingTasks.filter((task) => task.status === "done").length;
-    const reviewTasks = day.tasks.filter((task) => task.source === "review");
-    const reviewDone = reviewTasks.filter((task) => task.status === "done").length;
-    const reviewTotal = Math.max(day.baselineDueIds.length, reviewTasks.length);
-    const pendingReviewCount = reviewTasks.filter((task) => task.status !== "done" && isDue(state.progress[task.wordId])).length;
-    const reviewComplete = pendingReviewCount === 0 && day.baselineDueIds.every((id) => day.reviewDoneIds.includes(id) || !isDue(state.progress[id]));
-    const progress = Math.round(((learned / total) * 30) + ((practiced / total) * 35) + (exerciseDone ? 20 : 0) + (reviewTotal ? (reviewDone / reviewTotal) * 15 : 15));
-    const action = learned < total
+    const plan = dailyPlanMetrics(day);
+    const newComplete = total === 0 || practiced >= total;
+    const workTotal = total + plan.plannedReviews;
+    const progress = workTotal ? Math.round(((practiced + plan.reviewDone) / workTotal) * 100) : 100;
+    const action = plan.reviewRemaining
+      ? { action: "start-review", label: `Review ${plan.reviewRemaining} planned word${plan.reviewRemaining === 1 ? "" : "s"}`, icon: "↻" }
+      : learned < total
       ? { route: "learn", label: learned ? "Continue picture study" : "Start picture study", icon: "✦" }
       : practiced < total
         ? { route: "practice", label: "Continue spelling", icon: "✎" }
-        : !exerciseDone
-          ? { route: "practice", label: "Open book exercise", icon: "▤" }
-          : !reviewComplete
-            ? { route: "practice", label: `Review ${Math.max(1, pendingReviewCount || reviewTotal - reviewDone)} due word${Math.max(1, pendingReviewCount || reviewTotal - reviewDone) === 1 ? "" : "s"}`, icon: "↻" }
-            : { route: "practice", label: "View set results", icon: "🏆" };
+        : exerciseAvailable && !exerciseDone
+          ? { route: "practice", label: "Optional book exercise", icon: "▤" }
+          : { route: "practice", label: day.completed ? "View today's results" : "Finish today's plan", icon: "🏆" };
     return `
       <section class="view-page home-page core-home" style="--core-book-color:${safeColor(batch?.bookColor, "#00a9cf")}">
-        <div class="page-heading"><div><p class="eyebrow">2000 CORE ENGLISH WORDS</p><h1>Ready for Set ${batch?.sequence || 1}, Kevin?</h1><p>Ten new picture words plus every memory review that is due today.</p></div><span class="date-stamp">BOOK ${batch?.book || 1} · UNIT ${batch?.unit || 1}</span></div>
+        <div class="page-heading"><div><p class="eyebrow">2000 CORE ENGLISH WORDS</p><h1>Ready for Set ${batch?.sequence || 1}, Kevin?</h1><p>Today's frozen plan balances older memories with ${total} new word${total === 1 ? "" : "s"} from this ten-word set.</p></div><span class="date-stamp">BOOK ${batch?.book || 1} · UNIT ${batch?.unit || 1}</span></div>
         <section class="home-hero core-course-hero">
-          <div class="hero-copy"><span class="hero-kicker">BOOK ${batch?.book || 1} · UNIT ${batch?.unit || 1} · ${escapeHtml(batch?.setLabel || "Set A")}</span><h2 class="hero-title">${escapeHtml(batch?.theme || "Core English")}</h2><p class="hero-subtitle">Study the book pictures, spell every new word, use them on the original exercise page, and revisit older words at the best memory intervals.</p><div class="hero-actions"><button class="btn btn-primary" type="button" data-route="${action.route}"><span>${action.icon}</span>${action.label}</button><button class="btn btn-ghost" type="button" data-route="books">Choose another set</button></div></div>
+          <div class="hero-copy"><span class="hero-kicker">BOOK ${batch?.book || 1} · UNIT ${batch?.unit || 1} · ${escapeHtml(batch?.setLabel || "Set A")}</span><h2 class="hero-title">${escapeHtml(batch?.theme || "Core English")}</h2><p class="hero-subtitle">Review comes first. The remaining words in this set stay safely queued for another day; the workbook page unlocks after all ten have been learned.</p><div class="hero-actions"><button class="btn btn-primary" type="button" ${action.action ? `data-action="${action.action}"` : `data-route="${action.route}"`}><span>${action.icon}</span>${action.label}</button><button class="btn btn-ghost" type="button" data-route="books">Choose another set</button></div></div>
           <div class="core-book-badge" aria-label="Book ${batch?.book || 1}, set ${batch?.sequence || 1}"><strong>${batch?.book || 1}</strong><span>BOOK</span><small>SET ${batch?.sequence || 1}/128</small></div>
         </section>
+        ${renderDailyPlanSummary(day, true)}
         <section class="paper-card core-route-card"><div class="card-head"><div><h2>Your learning route</h2><p>Complete each stop to unlock the next one.</p></div><strong>${progress}%</strong></div><ol class="core-route">
-          <li class="${learned >= total ? "is-done" : "is-active"}"><span>1</span><strong>Picture Study</strong><small>${learned}/${total} words</small></li>
-          <li class="${practiced >= total ? "is-done" : learned >= total ? "is-active" : "is-locked"}"><span>2</span><strong>Spelling</strong><small>${spellingDone}/${Math.max(20, spellingTasks.length)} rounds</small></li>
-          <li class="${exerciseDone ? "is-done" : practiced >= total ? "is-active" : "is-locked"}"><span>3</span><strong>Book Exercise</strong><small>${exerciseDone ? "Complete" : "10 answers"}</small></li>
-          <li class="${reviewComplete ? "is-done" : exerciseDone ? "is-active" : "is-locked"}"><span>4</span><strong>Memory Review</strong><small>${reviewTotal ? `${reviewDone}/${reviewTotal} due words` : "All clear today"}</small></li>
+          <li class="${plan.reviewRemaining ? "is-active" : "is-done"}"><span>1</span><strong>Memory Review</strong><small>${plan.plannedReviews ? `${plan.reviewDone}/${plan.plannedReviews} planned words` : "All clear today"}</small></li>
+          <li class="${total === 0 || learned >= total ? "is-done" : !plan.reviewRemaining ? "is-active" : "is-locked"}"><span>2</span><strong>Picture Study</strong><small>${total ? `${learned}/${total} words today` : "0 new words today"}</small></li>
+          <li class="${newComplete ? "is-done" : learned >= total && !plan.reviewRemaining ? "is-active" : "is-locked"}"><span>3</span><strong>Spelling</strong><small>${total ? `${spellingDone}/${Math.max(total * 2, spellingTasks.length)} rounds` : "No new rounds"}</small></li>
+          <li class="${exerciseDone ? "is-done" : exerciseAvailable ? "is-active" : "is-locked"}"><span>4</span><strong>Book Exercise</strong><small>${exerciseDone ? "Complete" : exerciseAvailable ? "Available · not required today" : `${day.deferredNewIds.length} set words remain`}</small></li>
         </ol></section>
       </section>`;
   }
@@ -2569,7 +2788,7 @@
       if (sprint.awaitingStart) return renderSprintCheckpoint();
     }
     const task = currentTask();
-    if (coreEnglish && state.today.newIds.length && state.today.newIds.every((id) => state.today.practicedIds.includes(id)) && !coreExerciseIsComplete() && (!task || task.source === "review")) {
+    if (coreEnglish && !task && coreBatchReadyForExercise() && !coreExerciseIsComplete()) {
       return renderCoreExercise();
     }
     if (!task) {
@@ -2708,8 +2927,15 @@
     const day = state.today;
     if (isCoreDay(day)) {
       const batch = coreBatchById(day.coreBatchId) || coreBatchInfo();
-      const exerciseCount = coreExerciseAnswers(day.coreExerciseId).length || 10;
-      return `<section class="view-page round-complete"><div><div class="result-medal">📘</div><p class="eyebrow" style="justify-content:center">CORE SET ${batch?.sequence || 1} COMPLETE</p><h1 class="result-title">Learn, use, and remember — complete!</h1><p class="result-subtitle">Kevin mastered all ten new words, corrected every workbook answer, and completed every memory review due today.</p><div class="result-stats"><span class="result-stat"><strong>10</strong><small>NEW WORDS</small></span><span class="result-stat"><strong>${exerciseCount}</strong><small>CORRECT ANSWERS</small></span><span class="result-stat"><strong>${day.reviewDoneIds.length}</strong><small>MEMORY REVIEWS</small></span></div><div class="button-row" style="justify-content:center"><button class="btn btn-primary" type="button" data-action="start-next-core-set">Start Set ${Math.min(128, (batch?.sequence || 1) + 1)} →</button><button class="btn btn-soft" type="button" data-route="books">Choose a different set</button></div></div></section>`;
+      const plan = dailyPlanMetrics(day);
+      const setReady = coreBatchReadyForExercise(day);
+      const exerciseDone = coreExerciseIsComplete(day);
+      const nextAction = exerciseDone
+        ? `<button class="btn btn-primary" type="button" data-action="start-next-core-set">Start Set ${Math.min(128, (batch?.sequence || 1) + 1)} →</button>`
+        : setReady
+          ? `<button class="btn btn-primary" type="button" data-route="practice">Open optional book exercise →</button>`
+          : `<button class="btn btn-primary" type="button" data-route="home">Back to today's plan</button>`;
+      return `<section class="view-page round-complete"><div><div class="result-medal">📘</div><p class="eyebrow" style="justify-content:center">TODAY'S CORE PLAN COMPLETE</p><h1 class="result-title">A balanced day of learning is complete!</h1><p class="result-subtitle">Kevin finished the frozen daily plan. ${day.deferredNewIds.length ? `${day.deferredNewIds.length} remaining set word${day.deferredNewIds.length === 1 ? " stays" : "s stay"} safely queued for another day.` : setReady ? "All ten set words are learned; the workbook page is now available." : "The next plan will continue from this set."}</p><div class="result-stats"><span class="result-stat"><strong>${day.newIds.length}</strong><small>NEW WORDS</small></span><span class="result-stat"><strong>${plan.reviewDone}</strong><small>MEMORY REVIEWS</small></span><span class="result-stat"><strong>${plan.backlog}</strong><small>SAFE BACKLOG</small></span></div><div class="button-row" style="justify-content:center">${nextAction}<button class="btn btn-soft" type="button" data-route="books">Choose a different set</button></div></div></section>`;
     }
     const dueAt = Object.values(state.progress)
       .map((progress) => progress.dueAt)
@@ -2794,6 +3020,7 @@
   function renderReview() {
     if (isCoreDay()) return renderCoreReview();
     const dueIds = getDueIds();
+    const plan = dailyPlanMetrics();
     const progressItems = Object.values(state.progress);
     const scheduled = progressItems.filter((item) => ["reviewing", "relearning", "mature"].includes(item.status)).length;
     const mastered = masteredCount();
@@ -2804,7 +3031,7 @@
       <section class="view-page">
         <div class="page-heading">
           <div><p class="eyebrow">MEMORY GROWTH MAP</p><h1>记忆不是硬背，是按时回来</h1><p>每次在快忘记前成功想起，下一次复习就能走得更远。</p></div>
-          ${dueIds.length ? `<button class="btn btn-coral" type="button" data-action="start-review">复习 ${dueIds.length} 个到期词 →</button>` : `<span class="date-stamp">ALL CLEAR ✓</span>`}
+          ${plan.reviewRemaining ? `<button class="btn btn-coral" type="button" data-action="start-review">复习 ${plan.reviewRemaining} 个今日计划词 →</button>` : `<span class="date-stamp">${plan.backlog ? `${plan.backlog} 个积压留待后续` : "ALL CLEAR ✓"}</span>`}
         </div>
 
         <div class="review-summary">
@@ -2823,7 +3050,7 @@
               return `<div class="map-station ${count ? "has-words" : ""} ${masteredStation ? "is-mastered" : ""}"><span class="station-node">${delay.icon}</span><strong>第 ${index + 1} 站 · ${delay.label}</strong><small>${count ? `${count} 个单词在这里` : "等待抵达"}</small></div>`;
             }).join("")}
           </div>
-          <div class="map-legend"><p><strong>复习规则：</strong>答对就前进一站；答错进入 10 分钟重新学习，但不会清空以前的记录。<br />10 分钟 → 1 天 → 3 天 → 7 天 → 14 天 → 30 天 → 60 天 → 120 天 → 240 天 → 365 天</p>${dueIds.length ? `<button class="btn btn-coral" type="button" data-action="start-review">现在复习</button>` : `<span class="book-tag">🌿 记忆正在生长</span>`}</div>
+          <div class="map-legend"><p><strong>复习规则：</strong>答对就前进一站；答错进入 10 分钟重新学习，但不会清空以前的记录。<br />10 分钟 → 1 天 → 3 天 → 7 天 → 14 天 → 30 天 → 60 天 → 120 天 → 240 天 → 365 天</p>${plan.reviewRemaining ? `<button class="btn btn-coral" type="button" data-action="start-review">完成今日 ${plan.reviewRemaining} 个计划词</button>` : `<span class="book-tag">🌿 ${plan.backlog ? "积压已安全留到后续计划" : "记忆正在生长"}</span>`}</div>
         </section>
       </section>`;
   }
@@ -2832,13 +3059,14 @@
     const coreIds = bankWordIds("core2000");
     const entries = Object.entries(state.progress).filter(([id]) => coreIds.has(id));
     const dueIds = coreDueIds(Date.now(), state.today.newIds);
+    const plan = dailyPlanMetrics();
     const scheduled = entries.filter(([, item]) => ["reviewing", "relearning", "mature"].includes(item.status)).length;
     const mastered = entries.filter(([, item]) => item.status === "mature").length;
     const nextDue = entries.map(([, item]) => item.dueAt).filter((time) => time && time > Date.now()).sort((a, b) => a - b)[0];
     const labels = ["10 MIN", "1 DAY", "3 DAYS", "7 DAYS", "14 DAYS", "30 DAYS", "60 DAYS", "120 DAYS", "240 DAYS", "365 DAYS"];
     const counts = REVIEW_DELAYS.map((_, step) => entries.filter(([, item]) => ["reviewing", "relearning", "mature"].includes(item.status) && item.step === step).length);
     const nextText = !nextDue ? "—" : nextDue - Date.now() < 3_600_000 ? `${Math.max(1, Math.ceil((nextDue - Date.now()) / 60_000))} MIN` : nextDue - Date.now() < DAY_MS ? `${Math.ceil((nextDue - Date.now()) / 3_600_000)} HOURS` : `${Math.ceil((nextDue - Date.now()) / DAY_MS)} DAYS`;
-    return `<section class="view-page"><div class="page-heading"><div><p class="eyebrow">EBBINGHAUS MEMORY MAP</p><h1>Come back just before the memory fades.</h1><p>Every successful recall moves a word to a longer interval. A missed word returns sooner for extra support.</p></div>${dueIds.length ? `<button class="btn btn-coral" type="button" data-action="start-review">Review ${dueIds.length} due word${dueIds.length === 1 ? "" : "s"} →</button>` : `<span class="date-stamp">ALL CLEAR ✓</span>`}</div><div class="review-summary"><div class="review-stat-card"><strong>${dueIds.length}</strong><span>DUE NOW</span></div><div class="review-stat-card"><strong>${scheduled}</strong><span>SCHEDULED</span></div><div class="review-stat-card"><strong>${mastered}</strong><span>LONG-TERM</span></div><div class="review-stat-card"><strong>${nextText}</strong><span>NEXT REVIEW</span></div></div><section class="memory-map" aria-label="Ten-stage long-term Ebbinghaus review map"><div class="map-path" aria-hidden="true"></div><div class="map-stations">${REVIEW_DELAYS.map((delay, index) => `<div class="map-station ${counts[index] ? "has-words" : ""} ${index >= MATURE_STEP && counts[index] ? "is-mastered" : ""}"><span class="station-node">${delay.icon}</span><strong>STAGE ${index + 1} · ${labels[index]}</strong><small>${counts[index] ? `${counts[index]} word${counts[index] === 1 ? "" : "s"} here` : "Waiting for a word"}</small></div>`).join("")}</div><div class="map-legend"><p><strong>Review path:</strong> 10 minutes → 1 day → 3 days → 7 days → 14 days → 30 days → 60 days → 120 days → 240 days → 365 days.<br />Correct recall moves forward; a lapse starts a 10-minute relearning step without erasing earlier history.</p>${dueIds.length ? `<button class="btn btn-coral" type="button" data-action="start-review">Start memory review</button>` : `<span class="book-tag">🌿 MEMORY IS GROWING</span>`}</div></section></section>`;
+    return `<section class="view-page"><div class="page-heading"><div><p class="eyebrow">EBBINGHAUS MEMORY MAP</p><h1>Come back just before the memory fades.</h1><p>Every successful recall moves a word to a longer interval. A missed word returns sooner for extra support.</p></div>${plan.reviewRemaining ? `<button class="btn btn-coral" type="button" data-action="start-review">Review ${plan.reviewRemaining} planned word${plan.reviewRemaining === 1 ? "" : "s"} →</button>` : `<span class="date-stamp">${plan.backlog ? `${plan.backlog} BACKLOG · SAFELY DEFERRED` : "ALL CLEAR ✓"}</span>`}</div><div class="review-summary"><div class="review-stat-card"><strong>${dueIds.length}</strong><span>DUE NOW</span></div><div class="review-stat-card"><strong>${scheduled}</strong><span>SCHEDULED</span></div><div class="review-stat-card"><strong>${mastered}</strong><span>LONG-TERM</span></div><div class="review-stat-card"><strong>${nextText}</strong><span>NEXT REVIEW</span></div></div><section class="memory-map" aria-label="Ten-stage long-term Ebbinghaus review map"><div class="map-path" aria-hidden="true"></div><div class="map-stations">${REVIEW_DELAYS.map((delay, index) => `<div class="map-station ${counts[index] ? "has-words" : ""} ${index >= MATURE_STEP && counts[index] ? "is-mastered" : ""}"><span class="station-node">${delay.icon}</span><strong>STAGE ${index + 1} · ${labels[index]}</strong><small>${counts[index] ? `${counts[index]} word${counts[index] === 1 ? "" : "s"} here` : "Waiting for a word"}</small></div>`).join("")}</div><div class="map-legend"><p><strong>Review path:</strong> 10 minutes → 1 day → 3 days → 7 days → 14 days → 30 days → 60 days → 120 days → 240 days → 365 days.<br />Correct recall moves forward; a lapse starts a 10-minute relearning step without erasing earlier history.</p>${plan.reviewRemaining ? `<button class="btn btn-coral" type="button" data-action="start-review">Review today's ${plan.reviewRemaining}</button>` : `<span class="book-tag">🌿 ${plan.backlog ? "BACKLOG KEPT FOR A LATER PLAN" : "MEMORY IS GROWING"}</span>`}</div></section></section>`;
   }
 
   function renderSettings() {
@@ -4029,6 +4257,9 @@
     progressForStudyView,
     shouldSyncSprintDateBeforeAdvance,
     filterDueIdsForBank,
+    dailyNewLimit,
+    buildDailyPlan,
+    dailyPlanMetrics,
     shouldIgnoreGlobalEnter,
     taskCountsAsCleanInitial,
     resetTaskForMasteryRetry,
