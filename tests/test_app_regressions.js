@@ -428,6 +428,16 @@ const moderatePlan = api.buildDailyPlan(overloadedDueIds.slice(0, 20), overloade
 assert.ok(moderatePlan.newLimit >= 5 && moderatePlan.newLimit <= 8, "11-20 due cards should reduce but not eliminate new words");
 assert.ok(moderatePlan.estimatedMinutes <= 20);
 
+const ordinaryDay = {
+  pausedAt: null,
+  newIds: ["ket:test"],
+  learnedIds: [],
+  practicedIds: []
+};
+assert.equal(api.ordinaryHomeAction(ordinaryDay, 2).action, "start-review", "ordinary days must lead with planned reviews before new study");
+assert.equal(api.ordinaryHomeAction(ordinaryDay, 0).route, "learn");
+assert.equal(api.ordinaryHomeAction({ ...ordinaryDay, pausedAt: 123 }, 2).action, "resume-today");
+
 const metricsNow = new Date(2026, 8, 30, 12, 0, 0).getTime();
 const truckLexeme = api.lexemeIdForWord(testWord);
 const memoryLexeme = api.lexemeIdForWord(coreWord);

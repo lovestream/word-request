@@ -2846,11 +2846,17 @@
       if (sprint.awaitingStart) return { route: "practice", label: `开始${sprintPhaseMeta(sprint.phase).title}`, icon: sprintPhaseMeta(sprint.phase).icon };
       return { route: "practice", label: `继续${sprintPhaseMeta(sprint.phase).title}`, icon: sprintPhaseMeta(sprint.phase).icon };
     }
+    return ordinaryHomeAction(day, dailyPlanMetrics(day).reviewRemaining);
+  }
+
+  function ordinaryHomeAction(day, reviewRemaining) {
+    if (day.pausedAt) return { action: "resume-today", label: "继续今天的任务", icon: "↻" };
+    const learned = day.learnedIds.length;
     const newDone = day.newIds.length === 0 || day.newIds.every((id) => day.practicedIds.includes(id));
-    const due = dailyPlanMetrics(day).reviewRemaining;
-    if (day.newIds.length === 0 && due === 0) return { route: "books", label: "换一本词库", icon: "▤" };
+    if (reviewRemaining > 0) return { action: "start-review", label: `先复习 ${reviewRemaining} 个旧词`, icon: "↻" };
+    if (day.newIds.length === 0) return { route: "books", label: "换一本词库", icon: "▤" };
     if (learned < day.newIds.length) return { route: "learn", label: learned ? "继续学习" : "出发学新词", icon: "✦" };
-    if (!newDone || due) return { route: "practice", label: due && newDone ? "开始曲线复习" : "开始拼写训练", icon: "✎" };
+    if (!newDone) return { route: "practice", label: "开始拼写训练", icon: "✎" };
     return { route: "review", label: "查看记忆地图", icon: "↻" };
   }
 
@@ -5075,6 +5081,7 @@
     dailyNewLimit,
     buildDailyPlan,
     dailyPlanMetrics,
+    ordinaryHomeAction,
     learningMetrics,
     localWeekKey,
     weeklyCheckPlan,
