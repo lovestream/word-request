@@ -1251,7 +1251,11 @@
 
     const previous = targetState.stats.lastGoalDate;
     const distance = dayDistance(previous, day.date);
-    targetState.stats.streak = distance === 1 ? targetState.stats.streak + 1 : 1;
+    targetState.stats.streak = !previous
+      ? 1
+      : distance === 1
+        ? targetState.stats.streak + 1
+        : Math.max(1, targetState.stats.streak);
     targetState.stats.bestStreak = Math.max(targetState.stats.bestStreak, targetState.stats.streak);
     targetState.stats.lastGoalDate = day.date;
     targetState.history.push({

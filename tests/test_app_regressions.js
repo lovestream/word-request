@@ -800,6 +800,22 @@ assert.equal(completionState.stats.streak, 4, "a second set on the same day must
 assert.equal(completionState.history.length, 1, "daily goal history must have one row per completed date");
 assert.ok(completionState.courseCompletion["core2000-b1-u01-b"], "both course sets must remain recorded");
 
+assert.equal(api.dayDistance("2026-03-07", "2026-03-10"), 3, "calendar-day distance must remain stable across daylight-saving changes");
+const returnAfterBreak = {
+  stats: { streak: 6, bestStreak: 6, lastGoalDate: "2026-09-20" },
+  scoreLedger: [],
+  dailyCompletion: {},
+  courseCompletion: {},
+  history: []
+};
+assert.equal(api.recordCompletionState(returnAfterBreak, {
+  ...firstSetDay,
+  date: "2026-09-24",
+  coreBatchId: "core2000-b1-u02-a"
+}, 3000, true), true);
+assert.equal(returnAfterBreak.stats.streak, 6, "returning after missed days must preserve the habit chain without granting extra days");
+assert.equal(returnAfterBreak.stats.bestStreak, 6);
+
 assert.throws(
   () => api.mergeState({ schemaVersion: 1, settings: [], stats: [], progress: [] }, true),
   /必要字段/
