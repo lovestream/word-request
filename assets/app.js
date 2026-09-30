@@ -2495,6 +2495,13 @@
       .sort((left, right) => right.score - left.score || left.index - right.index)[0].voice;
   }
 
+  function speechVoiceLabel(voices) {
+    const voice = selectAmericanVoice(voices);
+    if (!voice) return "en-US voice requested";
+    const language = safeText(voice.lang, "English", 20);
+    return /^en-US/i.test(language) ? `US voice · ${language}` : `English fallback · ${language}`;
+  }
+
   function speak(text, button = null, rate = 0.78) {
     if (!text) return;
     if (!state.settings.sound) {
@@ -3097,6 +3104,7 @@
     const breakdownClass = runtime.breakdownOpen ? "" : "is-collapsed";
     const verifiedSoundChunks = word.breakdown?.type !== "spelling chunks";
     const studyDefinition = studyDefinitionFor(word);
+    const voiceLabel = speechVoiceLabel("speechSynthesis" in window ? window.speechSynthesis.getVoices() : []);
     const englishMeaning = (coreEnglish || state.settings.showEnglish) ? `<div class="meaning-audio-row"><p class="english-meaning">${escapeHtml(studyDefinition)}</p><button class="meaning-sound" type="button" data-action="speak" data-say="${escapeHtml(studyDefinition)}" data-rate="0.74" aria-label="${coreEnglish ? `Hear the definition: ${escapeHtml(studyDefinition)}` : "播放英文释义"}" title="${coreEnglish ? "Hear the definition" : "播放英文释义"}">▶</button></div>` : "";
     const sessionTag = day.practiceMode === "sprint"
       ? `${BANK_META[day.bank]?.short || day.bank} · DAY ${day.sprint.day} · ${sprintRangeText(day.sprint)}`
@@ -3122,7 +3130,7 @@
             <div class="word-title-row">
               <div>
                 <button class="study-word word-trigger ${word.word.includes(" ") ? "is-phrase" : ""}" type="button" data-action="toggle-breakdown" aria-expanded="${runtime.breakdownOpen}">${escapeHtml(word.word)}</button>
-                <div class="ipa-row"><span>${escapeHtml(word.ipa || "/—/")}</span>${word.pos?.length ? `<span class="pos-pill">${escapeHtml(Array.isArray(word.pos) ? word.pos.join(" · ") : word.pos)}</span>` : ""}<small>· ${coreEnglish ? "American voice" : "美式语音"}</small></div>
+                <div class="ipa-row"><span title="Dictionary IPA; browser speech may use a different English voice">${escapeHtml(word.ipa || "/—/")}</span>${word.pos?.length ? `<span class="pos-pill">${escapeHtml(Array.isArray(word.pos) ? word.pos.join(" · ") : word.pos)}</span>` : ""}<small>· ${escapeHtml(voiceLabel)}</small></div>
                 ${word.custom && word.lemma && normalizeAnswer(word.lemma) !== normalizeAnswer(word.word) ? `<div class="study-form-relation"><span>WORD FAMILY</span><strong>${escapeHtml(word.word)} → ${escapeHtml(word.lemma)}</strong>${word.formType ? `<small>${escapeHtml(word.formType)}</small>` : ""}</div>` : ""}
               </div>
               <button class="sound-button is-sequence" type="button" data-action="speak-sequence" data-word="${escapeHtml(word.word)}" data-definition="${escapeHtml(studyDefinition)}" data-example="${escapeHtml(word.example || "")}" aria-label="${coreEnglish ? "Play the word, definition, and example" : "依次播放单词、英文释义和例句"}" title="${coreEnglish ? "Play word → definition → example" : "连读：单词 → 英文释义 → 例句"}"><span>▶</span><small>${coreEnglish ? "PLAY ALL" : "连读"}</small></button>
@@ -5063,6 +5071,7 @@
     practiceGradeForTask,
     createAttemptEvent,
     selectAmericanVoice,
+    speechVoiceLabel,
     buildStudySpeechSequence,
     spellingVariants,
     answerFormsFor,

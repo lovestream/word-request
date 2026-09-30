@@ -212,6 +212,9 @@ const selectedVoice = api.selectAmericanVoice([
 assert.equal(selectedVoice.name, "Samantha Enhanced", "a high-quality American voice should win");
 assert.equal(api.selectAmericanVoice([{ name: "Daniel Premium", lang: "en-GB" }]).lang, "en-GB", "English remains a safe fallback when US voices are unavailable");
 assert.equal(api.selectAmericanVoice([{ name: "Bad News", lang: "en-US" }]), null, "novelty voices must never be selected for study");
+assert.equal(api.speechVoiceLabel([{ name: "Samantha Enhanced", lang: "en-US" }]), "US voice · en-US");
+assert.equal(api.speechVoiceLabel([{ name: "Daniel Premium", lang: "en-GB" }]), "English fallback · en-GB");
+assert.equal(api.speechVoiceLabel([]), "en-US voice requested");
 assert.deepEqual(
   JSON.parse(JSON.stringify(api.buildStudySpeechSequence(
     "blood",
