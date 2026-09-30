@@ -423,6 +423,36 @@ const moderatePlan = api.buildDailyPlan(overloadedDueIds.slice(0, 20), overloade
 assert.ok(moderatePlan.newLimit >= 5 && moderatePlan.newLimit <= 8, "11-20 due cards should reduce but not eliminate new words");
 assert.ok(moderatePlan.estimatedMinutes <= 20);
 
+const metricsNow = new Date(2026, 8, 30, 12, 0, 0).getTime();
+const truckLexeme = api.lexemeIdForWord(testWord);
+const memoryLexeme = api.lexemeIdForWord(coreWord);
+const metrics = api.learningMetrics({
+  progress: {
+    "ket:test": { learnedAt: metricsNow - 5 * 86_400_000 },
+    "core2000:test": { learnedAt: metricsNow - 20 * 86_400_000 }
+  },
+  lexemeProgress: {
+    [truckLexeme]: { status: "mature", dueAt: metricsNow + 60 * 86_400_000 },
+    [memoryLexeme]: { status: "reviewing", dueAt: metricsNow + 86_400_000 }
+  },
+  attemptEvents: [
+    { eventId: "m1", cardId: "core2000:test", lexemeId: memoryLexeme, occurredAt: metricsNow - 2 * 86_400_000, mode: "full", source: "new", firstAttempt: true, firstAttemptCorrect: true, answerCorrect: true, usedHint: false, answerShown: false, grade: "good", durationMs: 60_000 },
+    { eventId: "m2", cardId: "ket:test", lexemeId: truckLexeme, occurredAt: metricsNow - 86_400_000, mode: "full", source: "review", firstAttempt: true, firstAttemptCorrect: false, answerCorrect: false, usedHint: false, answerShown: true, grade: "again", durationMs: 120_000 },
+    { eventId: "m3", cardId: "ket:test", lexemeId: truckLexeme, occurredAt: metricsNow - 3_600_000, mode: "full", source: "review", firstAttempt: true, firstAttemptCorrect: true, answerCorrect: true, usedHint: false, answerShown: false, grade: "good", durationMs: 60_000 }
+  ],
+  today: { reviewBacklogIds: ["ket:test"] }
+}, metricsNow);
+assert.equal(metrics.seen, 2);
+assert.equal(metrics.recognized, null, "recognition must remain unmeasured until a dedicated test exists");
+assert.equal(metrics.independentlySpelled, 2);
+assert.equal(metrics.mature, 1);
+assert.equal(metrics.new7, 1);
+assert.equal(metrics.new30, 2);
+assert.equal(metrics.firstAttemptRate, 67);
+assert.equal(metrics.retentionRate, 50);
+assert.equal(metrics.backlog, 1);
+assert.equal(metrics.difficultWords[0].word, "truck");
+
 const baseBackup = {
   schemaVersion: 1,
   settings: {

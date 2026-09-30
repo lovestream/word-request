@@ -1449,6 +1449,74 @@
     return Object.values(source.lexemeProgress || source.progress || {}).filter((item) => item.status === "mature").length;
   }
 
+  function learningMetrics(source = state, now = Date.now()) {
+    const sevenDaysAgo = now - 7 * DAY_MS;
+    const thirtyDaysAgo = now - 30 * DAY_MS;
+    const learnedLexemes = new Map();
+    for (const [cardId, item] of Object.entries(source?.progress || {})) {
+      const word = getWord(cardId);
+      if (!word || word.archived || !item?.learnedAt) continue;
+      const lexemeId = lexemeIdForWord(word);
+      const learnedAt = finiteNumber(item.learnedAt, 0, 0, 9_999_999_999_999);
+      const previous = learnedLexemes.get(lexemeId);
+      if (!previous || learnedAt < previous.learnedAt) learnedLexemes.set(lexemeId, { cardId, learnedAt });
+    }
+    const matureLexemes = new Set(
+      Object.entries(source?.lexemeProgress || {})
+        .filter(([, item]) => item?.status === "mature" && item.dueAt)
+        .map(([lexemeId]) => lexemeId)
+    );
+    const events = (source?.attemptEvents || []).filter((event) => event && event.occurredAt <= now);
+    const recentEvents = events.filter((event) => event.occurredAt >= thirtyDaysAgo);
+    const independentLexemes = new Set(events
+      .filter((event) => event.mode === "full"
+        && event.firstAttempt
+        && event.firstAttemptCorrect
+        && event.answerCorrect
+        && !event.usedHint
+        && !event.answerShown
+        && ["good", "easy"].includes(event.grade))
+      .map((event) => event.lexemeId || lexemeIdForWord(event.cardId))
+      .filter(Boolean));
+    const recentFirstAttempts = recentEvents.filter((event) => event.mode === "full" && event.firstAttempt);
+    const recentReviewAttempts = recentFirstAttempts.filter((event) => event.source === "review");
+    const firstAttemptCorrect = recentFirstAttempts.filter((event) => event.firstAttemptCorrect && !event.usedHint && !event.answerShown).length;
+    const retainedReviews = recentReviewAttempts.filter((event) => event.firstAttemptCorrect && !event.usedHint && !event.answerShown).length;
+    const timedEvents = recentEvents.filter((event) => event.durationMs > 0);
+    const activeDays = new Set(recentEvents.map((event) => localDateKey(new Date(event.occurredAt))));
+    const difficulty = new Map();
+    for (const event of recentEvents) {
+      if (!event.cardId || !["again", "hard"].includes(event.grade)) continue;
+      const word = getWord(event.cardId);
+      if (!word) continue;
+      const key = event.lexemeId || lexemeIdForWord(word);
+      const current = difficulty.get(key) || { cardId: word.id, word: word.word, again: 0, hard: 0, score: 0 };
+      if (event.grade === "again") current.again += 1;
+      else current.hard += 1;
+      current.score = current.again * 2 + current.hard;
+      difficulty.set(key, current);
+    }
+    return {
+      seen: learnedLexemes.size,
+      recognized: null,
+      independentlySpelled: independentLexemes.size,
+      mature: matureLexemes.size,
+      new7: [...learnedLexemes.values()].filter((item) => item.learnedAt >= sevenDaysAgo).length,
+      new30: [...learnedLexemes.values()].filter((item) => item.learnedAt >= thirtyDaysAgo).length,
+      firstAttemptRate: recentFirstAttempts.length ? Math.round(firstAttemptCorrect / recentFirstAttempts.length * 100) : null,
+      retentionRate: recentReviewAttempts.length ? Math.round(retainedReviews / recentReviewAttempts.length * 100) : null,
+      firstAttemptCount: recentFirstAttempts.length,
+      reviewAttemptCount: recentReviewAttempts.length,
+      averageActiveMinutes: activeDays.size && timedEvents.length
+        ? Math.round(timedEvents.reduce((total, event) => total + event.durationMs, 0) / activeDays.size / 60_000 * 10) / 10
+        : null,
+      activeDays30: activeDays.size,
+      backlog: source?.today?.reviewBacklogIds?.length || 0,
+      difficultWords: [...difficulty.values()].sort((left, right) => right.score - left.score || left.word.localeCompare(right.word)).slice(0, 8),
+      hasEventEvidence: events.length > 0
+    };
+  }
+
   function learnedInBank(bankKey) {
     return (window.WORD_BANKS?.[bankKey] || []).filter((word) => state.progress[word.id]?.learnedAt).length;
   }
@@ -2563,6 +2631,7 @@
       review: renderReview,
       books: renderBooks,
       notebook: renderNotebook,
+      parent: renderParentReport,
       pk: renderPk,
       settings: renderSettings
     };
@@ -3448,6 +3517,34 @@
     return `<section class="view-page"><div class="page-heading"><div><p class="eyebrow">EBBINGHAUS MEMORY MAP</p><h1>Come back just before the memory fades.</h1><p>Every successful recall moves a word to a longer interval. A missed word returns sooner for extra support.</p></div>${plan.reviewRemaining ? `<button class="btn btn-coral" type="button" data-action="start-review">Review ${plan.reviewRemaining} planned word${plan.reviewRemaining === 1 ? "" : "s"} →</button>` : `<span class="date-stamp">${plan.backlog ? `${plan.backlog} BACKLOG · SAFELY DEFERRED` : "ALL CLEAR ✓"}</span>`}</div><div class="review-summary"><div class="review-stat-card"><strong>${dueIds.length}</strong><span>DUE NOW</span></div><div class="review-stat-card"><strong>${scheduled}</strong><span>SCHEDULED</span></div><div class="review-stat-card"><strong>${mastered}</strong><span>LONG-TERM</span></div><div class="review-stat-card"><strong>${nextText}</strong><span>NEXT REVIEW</span></div></div><section class="memory-map" aria-label="Ten-stage long-term Ebbinghaus review map"><div class="map-path" aria-hidden="true"></div><div class="map-stations">${REVIEW_DELAYS.map((delay, index) => `<div class="map-station ${counts[index] ? "has-words" : ""} ${index >= MATURE_STEP && counts[index] ? "is-mastered" : ""}"><span class="station-node">${delay.icon}</span><strong>STAGE ${index + 1} · ${labels[index]}</strong><small>${counts[index] ? `${counts[index]} word${counts[index] === 1 ? "" : "s"} here` : "Waiting for a word"}</small></div>`).join("")}</div><div class="map-legend"><p><strong>Review path:</strong> 10 minutes → 1 day → 3 days → 7 days → 14 days → 30 days → 60 days → 120 days → 240 days → 365 days.<br />Correct recall moves forward; a lapse starts a 10-minute relearning step without erasing earlier history.</p>${plan.reviewRemaining ? `<button class="btn btn-coral" type="button" data-action="start-review">Review today's ${plan.reviewRemaining}</button>` : `<span class="book-tag">🌿 ${plan.backlog ? "BACKLOG KEPT FOR A LATER PLAN" : "MEMORY IS GROWING"}</span>`}</div></section></section>`;
   }
 
+  function metricValue(value, suffix = "") {
+    return value == null ? "—" : `${value}${suffix}`;
+  }
+
+  function renderParentReport() {
+    const metrics = learningMetrics();
+    const difficultRows = metrics.difficultWords.map((item) => {
+      const progress = spellingProgress(item.cardId);
+      const due = progress?.dueAt ? relativeTime(progress.dueAt) : "未排期";
+      return `<tr><th scope="row">${escapeHtml(item.word)}</th><td>${item.again}</td><td>${item.hard}</td><td>${escapeHtml(due)}</td></tr>`;
+    }).join("");
+    return `<section class="view-page parent-report-page">
+      <div class="page-heading"><div><p class="eyebrow">PARENT LEARNING REPORT</p><h1>只看真实证据，不把“翻过卡片”当作掌握</h1><p>以下数据来自 Kevin 的独立首答、复习结果和长期排期；旧版本没有逐题日志的部分不会被凭空补齐。</p></div><span class="date-stamp">最近 30 天</span></div>
+      <section class="parent-level-grid" aria-label="词汇能力分层">
+        <article><span>01 · SEEN</span><strong>${metrics.seen}</strong><p>看过并进入学习记录</p></article>
+        <article class="is-unmeasured"><span>02 · RECOGNIZED</span><strong>—</strong><p>尚无独立选择题证据，不用拼写成绩冒充</p></article>
+        <article><span>03 · RECALLED SPELLING</span><strong>${metrics.independentlySpelled}</strong><p>完整拼写首次独立答对</p></article>
+        <article><span>04 · LONG-TERM</span><strong>${metrics.mature}</strong><p>进入 60 天以上仍继续抽检</p></article>
+      </section>
+      <div class="parent-report-grid">
+        <section class="paper-card parent-summary-card"><div class="card-head"><div><h2>学习流量</h2><p>控制新词流入，优先守住旧记忆</p></div></div><div class="parent-number-grid"><div><strong>${metrics.new7}</strong><span>7 天新接触</span></div><div><strong>${metrics.new30}</strong><span>30 天新接触</span></div><div><strong>${metrics.backlog}</strong><span>安全延期积压</span></div><div><strong>${metrics.activeDays30}</strong><span>30 天活跃日</span></div></div></section>
+        <section class="paper-card parent-summary-card"><div class="card-head"><div><h2>回忆质量</h2><p>只统计有逐题证据的记录</p></div></div><div class="parent-number-grid"><div><strong>${metricValue(metrics.firstAttemptRate, "%")}</strong><span>完整拼写首答正确率</span></div><div><strong>${metricValue(metrics.retentionRate, "%")}</strong><span>旧词独立保持率</span></div><div><strong>${metricValue(metrics.averageActiveMinutes)}</strong><span>活跃日可记录答题分钟</span></div><div><strong>${metrics.reviewAttemptCount}</strong><span>30 天独立复习首答</span></div></div></section>
+      </div>
+      <section class="paper-card parent-difficult-card"><div class="card-head"><div><h2>最近的困难词</h2><p>Again 权重高于 Hard；用于决定减量或多给一次回访，不用于惩罚。</p></div><button class="btn btn-small btn-soft" type="button" data-route="settings">调整每日新词上限</button></div>${difficultRows ? `<div class="parent-table-wrap"><table><thead><tr><th>单词</th><th>Again</th><th>Hard</th><th>下次回访</th></tr></thead><tbody>${difficultRows}</tbody></table></div>` : `<div class="book-empty">最近 30 天还没有可用的困难词逐题证据。</div>`}</section>
+      <section class="parent-data-note"><strong>${metrics.hasEventEvidence ? "逐题证据已启用" : "当前主要是旧版汇总记录"}</strong><p>“可记录答题分钟”只包括有计时的拼写作答，不等于 Kevin 的完整学习时长；识词能力将在独立轻量测验上线后单独统计。</p></section>
+    </section>`;
+  }
+
   function renderSettings() {
     const level = levelInfo();
     const goals = [5, 10, 20, 30];
@@ -3469,7 +3566,7 @@
 
     return `
       <section class="view-page">
-        <div class="page-heading"><div><p class="eyebrow">KEVIN'S FIELD KIT</p><h1>定制每日训练</h1><p>调整只影响学习方式；当天已经抽出的词不会突然消失。</p></div></div>
+        <div class="page-heading"><div><p class="eyebrow">KEVIN'S FIELD KIT</p><h1>定制每日训练</h1><p>调整只影响学习方式；当天已经抽出的词不会突然消失。</p></div><button class="btn btn-soft" type="button" data-route="parent">查看家长学习报告</button></div>
         <div class="settings-layout">
           <section class="paper-card settings-card">
             <div class="setting-group">
@@ -4754,7 +4851,7 @@
   window.addEventListener("hashchange", () => {
     stopSpeech();
     const requested = window.location.hash.slice(1);
-    route = ["home", "learn", "practice", "review", "books", "notebook", "pk", "settings"].includes(requested) ? requested : "home";
+    route = ["home", "learn", "practice", "review", "books", "notebook", "parent", "pk", "settings"].includes(requested) ? requested : "home";
     render();
   });
   window.addEventListener("storage", (event) => {
@@ -4834,6 +4931,7 @@
     dailyNewLimit,
     buildDailyPlan,
     dailyPlanMetrics,
+    learningMetrics,
     shouldIgnoreGlobalEnter,
     taskCountsAsCleanInitial,
     resetTaskForMasteryRetry,
@@ -4850,7 +4948,7 @@
   invalidateCustomCatalog();
   ensureToday();
   const requestedRoute = window.location.hash.slice(1);
-  route = ["home", "learn", "practice", "review", "books", "notebook", "pk", "settings"].includes(requestedRoute) ? requestedRoute : "home";
+  route = ["home", "learn", "practice", "review", "books", "notebook", "parent", "pk", "settings"].includes(requestedRoute) ? requestedRoute : "home";
   if (!window.location.hash) window.history.replaceState(null, "", "#home");
   render();
 })();
