@@ -4,7 +4,8 @@
   const STATE_KEY = "kevin-wordquest:state:v1";
   const BACKUP_KEY = "kevin-wordquest:backup:v1";
   const BACKUP_FORMAT = "kevin-word-quest-portable-record";
-  const BACKUP_FORMAT_VERSION = 1;
+  const STATE_SCHEMA_VERSION = 2;
+  const BACKUP_FORMAT_VERSION = 2;
   const APP_VERSION = "2026.09.30";
   const DEVICE_KEY = "kevin-wordquest:device-id:v1";
   const DAY_MS = 86_400_000;
@@ -124,7 +125,9 @@
 
   function defaultState() {
     return {
-      schemaVersion: 1,
+      schemaVersion: STATE_SCHEMA_VERSION,
+      migratedFromSchema: null,
+      historyQuality: "event-log",
       savedAt: Date.now(),
       updatedAt: Date.now(),
       revision: 0,
@@ -1004,7 +1007,7 @@
       return fresh;
     }
     if (strict && (
-      raw.schemaVersion !== 1
+      ![1, STATE_SCHEMA_VERSION].includes(raw.schemaVersion)
       || !raw.settings
       || typeof raw.settings !== "object"
       || Array.isArray(raw.settings)
@@ -1072,6 +1075,11 @@
       .map((item) => ({ date: item.date, bank: safeBank(item.bank, settings.bank), learned: safeInteger(item.learned, 0), reviewed: safeInteger(item.reviewed, 0), xp: safeInteger(item.xp, 0) })) : [];
     const attemptEvents = sanitizeAttemptEvents(raw.attemptEvents);
     const recognitionEvents = sanitizeRecognitionEvents(raw.recognitionEvents);
+    const historyQuality = ["legacy-summary", "mixed", "event-log"].includes(raw.historyQuality)
+      ? raw.historyQuality
+      : raw.schemaVersion === 1
+        ? (attemptEvents.length || recognitionEvents.length ? "mixed" : "legacy-summary")
+        : "event-log";
     const maxDeviceAttemptSequence = [...attemptEvents, ...recognitionEvents].reduce(
       (maximum, event) => event.deviceId === DEVICE_ID ? Math.max(maximum, event.sequence) : maximum,
       0
@@ -1082,7 +1090,9 @@
     const lexemeProgress = sanitizeLexemeProgress(raw.lexemeProgress, progress);
     const savedWords = sanitizeSavedWords(raw.savedWords);
     return {
-      schemaVersion: 1,
+      schemaVersion: STATE_SCHEMA_VERSION,
+      migratedFromSchema: raw.schemaVersion === 1 ? 1 : (raw.migratedFromSchema === 1 ? 1 : null),
+      historyQuality,
       savedAt: finiteNumber(raw.savedAt, Date.now(), 0, 9_999_999_999_999),
       updatedAt: finiteNumber(raw.updatedAt, raw.savedAt || Date.now(), 0, 9_999_999_999_999),
       revision: safeInteger(raw.revision, 0, 0, 1_000_000_000),
@@ -4531,7 +4541,7 @@
 
   function stateFromPortableRecord(parsed) {
     if (parsed?.format !== BACKUP_FORMAT) return parsed;
-    if (parsed.formatVersion !== BACKUP_FORMAT_VERSION || !parsed.state || typeof parsed.state !== "object" || Array.isArray(parsed.state)) {
+    if (![1, BACKUP_FORMAT_VERSION].includes(parsed.formatVersion) || !parsed.state || typeof parsed.state !== "object" || Array.isArray(parsed.state)) {
       throw new Error("不支持的学习记录文件版本");
     }
     return parsed.state;

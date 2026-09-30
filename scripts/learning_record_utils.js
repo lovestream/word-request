@@ -14,8 +14,8 @@ function readRecord(filename) {
   if (!state || typeof state !== "object" || Array.isArray(state)) {
     throw new Error("学习记录必须是 JSON 对象");
   }
-  if (state.schemaVersion !== 1) {
-    throw new Error(`当前只支持只读审计 V1 记录，收到 schemaVersion=${state.schemaVersion}`);
+  if (![1, 2].includes(state.schemaVersion)) {
+    throw new Error(`当前只支持只读审计 V1/V2 记录，收到 schemaVersion=${state.schemaVersion}`);
   }
   for (const key of ["settings", "stats", "progress"]) {
     if (!state[key] || typeof state[key] !== "object" || Array.isArray(state[key])) {
@@ -61,10 +61,13 @@ function summarizeRecord(record) {
   const ledger = Array.isArray(state.scoreLedger) ? state.scoreLedger : [];
   const history = Array.isArray(state.history) ? state.history : [];
   const attemptEvents = Array.isArray(state.attemptEvents) ? state.attemptEvents : [];
+  const recognitionEvents = Array.isArray(state.recognitionEvents) ? state.recognitionEvents : [];
 
   return {
     sha256: record.sha256,
     schemaVersion: state.schemaVersion,
+    migratedFromSchema: state.migratedFromSchema || null,
+    historyQuality: state.historyQuality || (state.schemaVersion === 1 ? "legacy-summary" : "unknown"),
     format: record.parsed?.format || "legacy-raw-state",
     formatVersion: record.parsed?.formatVersion || null,
     savedAt: Number(state.savedAt) || null,
@@ -101,6 +104,10 @@ function summarizeRecord(record) {
       independentGood: attemptEvents.filter((event) => event?.grade === "good" && !event?.usedHint && !event?.answerShown).length,
       byGrade: countBy(attemptEvents, (event) => event?.grade || "unknown"),
       byCueType: countBy(attemptEvents, (event) => event?.cueType || "unknown")
+    },
+    recognitionEvidence: {
+      events: recognitionEvents.length,
+      correct: recognitionEvents.filter((event) => event?.correct).length
     },
     coreExercises: {
       total: exercises.length,

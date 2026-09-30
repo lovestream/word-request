@@ -45,5 +45,19 @@ assert.equal(conflict.identical, false);
 assert.equal(conflict.safeToMerge, false);
 assert.match(conflict.recommendation, /禁止自动合并/);
 
+const v2Path = path.join(temporaryDirectory, "v2.wordquest.json");
+const v2 = JSON.parse(fs.readFileSync(fixture, "utf8"));
+v2.formatVersion = 2;
+v2.state.schemaVersion = 2;
+v2.state.migratedFromSchema = 1;
+v2.state.historyQuality = "mixed";
+v2.state.recognitionEvents = [{ eventId: "recognition:test:1", correct: true }];
+fs.writeFileSync(v2Path, JSON.stringify(v2), "utf8");
+const v2Audit = auditRecord(v2Path);
+assert.equal(v2Audit.summary.schemaVersion, 2);
+assert.equal(v2Audit.summary.migratedFromSchema, 1);
+assert.equal(v2Audit.summary.historyQuality, "mixed");
+assert.equal(v2Audit.summary.recognitionEvidence.events, 1);
+
 fs.rmSync(temporaryDirectory, { recursive: true, force: true });
 console.log("learning record tools: ok");

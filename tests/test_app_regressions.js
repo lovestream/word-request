@@ -231,7 +231,7 @@ const portableRecord = api.createPortableRecord({
   today: { date: "2026-08-26" }
 }, Date.UTC(2026, 7, 26, 8, 0, 0));
 assert.equal(portableRecord.format, "kevin-word-quest-portable-record");
-assert.equal(portableRecord.formatVersion, 1);
+assert.equal(portableRecord.formatVersion, 2);
 assert.equal(portableRecord.summary.activeBank, "core2000");
 assert.equal(portableRecord.summary.learnedWords, 1);
 assert.equal(portableRecord.summary.attemptEvents, 0);
@@ -262,6 +262,11 @@ assert.equal(api.importedRecordIsOlder(
 ), false);
 assert.equal(api.stateFromPortableRecord(portableRecord), portableRecord.state);
 assert.equal(api.stateFromPortableRecord({ schemaVersion: 1 }).schemaVersion, 1, "legacy JSON backups remain importable");
+assert.equal(api.stateFromPortableRecord({
+  format: "kevin-word-quest-portable-record",
+  formatVersion: 1,
+  state: { schemaVersion: 1 }
+}).schemaVersion, 1, "portable V1 backups remain importable");
 assert.throws(() => api.stateFromPortableRecord({
   format: "kevin-word-quest-portable-record",
   formatVersion: 999,
@@ -518,6 +523,9 @@ const baseBackup = {
 };
 
 const merged = api.mergeState(baseBackup, true);
+assert.equal(merged.schemaVersion, 2, "V1 state must migrate to the explicit V2 schema");
+assert.equal(merged.migratedFromSchema, 1);
+assert.equal(merged.historyQuality, "legacy-summary", "legacy totals must not be presented as fabricated item-level evidence");
 assert.equal(merged.today.tasks.length, 1, "semantic duplicate review tasks must collapse");
 assert.equal(merged.today.tasks[0].id, "review:ket:test:4:full");
 assert.equal(merged.today.planVersion, 1);
