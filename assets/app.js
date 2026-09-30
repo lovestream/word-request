@@ -90,6 +90,8 @@
     autoSpeakWord: null,
     browseStudy: false,
     bookQuery: "",
+    notebookQuery: "",
+    notebookSource: "Reading",
     practiceResult: null,
     practiceSource: null,
     pk: null,
@@ -98,12 +100,15 @@
   };
 
   function resetTransientRuntime() {
+    window.clearTimeout(runtime.notebookSearchTimer);
     runtime.breakdownOpen = false;
     runtime.feedback = null;
     runtime.lastWordId = null;
     runtime.autoSpeakWord = null;
     runtime.browseStudy = false;
     runtime.bookQuery = "";
+    runtime.notebookQuery = "";
+    runtime.notebookSearchTimer = null;
     runtime.practiceResult = null;
     runtime.practiceSource = null;
     runtime.pk = null;
@@ -156,6 +161,7 @@
       scoreLedger: [],
       attemptEvents: [],
       attemptSequence: 0,
+      savedWords: {},
       today: null,
       history: [],
       dailyCompletion: {},
@@ -614,13 +620,17 @@
     };
   }
 
-  function sanitizeToday(rawToday, settings, progress = {}, lexemeProgress = {}) {
+  function sanitizeToday(rawToday, settings, progress = {}, lexemeProgress = {}, savedWords = {}) {
     if (!rawToday || typeof rawToday !== "object" || Array.isArray(rawToday) || !safeDateKey(rawToday.date)) return null;
     const bank = safeBank(rawToday.bank, settings.bank);
     const practiceMode = ["mixed", "cloze", "full", "sprint"].includes(rawToday.practiceMode) ? rawToday.practiceMode : settings.practiceMode;
     const isSprint = practiceMode === "sprint";
     const sprint = isSprint ? sanitizeSprintState(rawToday.sprint, bank, sprintDayFor(bank, settings)) : null;
-    const allowedNewIds = bankWordIds(bank);
+    const allowedNewIds = new Set([
+      ...bankWordIds(bank),
+      ...savedTrainingIds({ savedWords }),
+      ...safeWordIds(rawToday.newIds)
+    ]);
     const rawNewIds = isSprint
       ? [...sprint.wordIds]
       : safeWordIds(rawToday.newIds).filter((id) => allowedNewIds.has(id));
@@ -818,6 +828,23 @@
     return result;
   }
 
+  function sanitizeSavedWords(raw) {
+    const result = {};
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return result;
+    for (const [rawId, item] of Object.entries(raw)) {
+      if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+      const cardId = canonicalWordId(safeText(item.cardId || rawId, "", 220));
+      if (!getWord(cardId)) continue;
+      result[cardId] = {
+        cardId,
+        sourceTag: safeText(item.sourceTag, "Reading", 80) || "Reading",
+        train: Boolean(item.train),
+        addedAt: finiteNumber(item.addedAt, Date.now(), 0, 9_999_999_999_999)
+      };
+    }
+    return result;
+  }
+
   function sanitizeAttemptEvents(raw) {
     if (!Array.isArray(raw)) return [];
     const unique = new Map();
@@ -938,6 +965,7 @@
     const progress = restoreInitialModesFromLedger(sanitizeProgress(raw.progress, orphanProgress), scoreLedger);
     restoreOrphanProgress(raw.orphanProgress, progress, orphanProgress);
     const lexemeProgress = sanitizeLexemeProgress(raw.lexemeProgress, progress);
+    const savedWords = sanitizeSavedWords(raw.savedWords);
     return {
       schemaVersion: 1,
       savedAt: finiteNumber(raw.savedAt, Date.now(), 0, 9_999_999_999_999),
@@ -963,10 +991,11 @@
         safeInteger(raw.attemptSequence, 0, 0, 1_000_000_000),
         maxDeviceAttemptSequence
       ),
+      savedWords,
       history,
       dailyCompletion: sanitizeDailyCompletion(raw.dailyCompletion),
       courseCompletion: sanitizeCourseCompletion(raw.courseCompletion),
-      today: sanitizeToday(raw.today, settings, progress, lexemeProgress)
+      today: sanitizeToday(raw.today, settings, progress, lexemeProgress, savedWords)
     };
   }
 
@@ -1179,6 +1208,30 @@
     return Object.fromEntries((ids || []).map((id) => [id, spellingProgress(id, source)]));
   }
 
+  function bankKeyForWordId(wordId) {
+    return Object.keys(BANK_META).find((bankKey) => bankWordIds(bankKey).has(canonicalWordId(wordId))) || "";
+  }
+
+  function savedTrainingIds(source = state) {
+    return Object.values(source?.savedWords || {})
+      .filter((entry) => entry.train && getWord(entry.cardId))
+      .sort((left, right) => left.addedAt - right.addedAt || left.cardId.localeCompare(right.cardId))
+      .map((entry) => entry.cardId);
+  }
+
+  function allowedDailyNewIds(bankKey, source = state) {
+    return new Set([...bankWordIds(bankKey), ...savedTrainingIds(source)]);
+  }
+
+  function pendingSavedTrainingIds(excluding = [], source = state) {
+    const excluded = new Set(excluding);
+    return savedTrainingIds(source).filter((id) => {
+      if (excluded.has(id)) return false;
+      const progress = source.progress?.[id];
+      return !progress?.learnedAt || (progress.status === "learning" && !progress.dueAt);
+    });
+  }
+
   function moversSequenceValue(word) {
     if (!word) return Number.MAX_SAFE_INTEGER;
     const section = word.cardType === "phrase" ? 1 : 0;
@@ -1370,8 +1423,11 @@
         const progress = state.progress[id];
         return !progress?.dueAt && (!progress?.learnedAt || progress.status === "learning");
       });
-      const newIds = pendingSetIds.slice(0, plan.newLimit);
-      const deferredNewIds = pendingSetIds.slice(newIds.length);
+      const savedCandidates = pendingSavedTrainingIds(batch?.wordIds || []);
+      const plannedSavedIds = savedCandidates.slice(0, Math.min(3, plan.newLimit));
+      const plannedSetIds = pendingSetIds.slice(0, Math.max(0, plan.newLimit - plannedSavedIds.length));
+      const newIds = [...plannedSavedIds, ...plannedSetIds];
+      const deferredNewIds = [...savedCandidates.slice(plannedSavedIds.length), ...pendingSetIds.slice(plannedSetIds.length)];
       const carryoverIds = newIds.filter((id) => state.progress[id]?.learnedAt);
       state.today = {
         date: todayKey,
@@ -1450,7 +1506,7 @@
       return;
     }
     const bankWords = currentBankWords();
-    const bankIds = new Set(bankWords.map((word) => word.id));
+    const bankIds = allowedDailyNewIds(state.settings.bank);
     const previousCarryover = previousDay
       ? (previousDay.newIds || []).filter((id) =>
         !(previousDay.practicedIds || []).includes(id)
@@ -1472,16 +1528,19 @@
       ? sortMoversIds(rawCarryover)
       : rawCarryover;
     const carryLearned = carryover.filter((id) => state.progress[id]?.learnedAt);
-    const unseen = bankWords.filter((word) => !state.progress[word.id]?.learnedAt && !carryover.includes(word.id));
+    const savedCandidateSet = new Set(savedTrainingIds());
+    const unseen = bankWords.filter((word) => !state.progress[word.id]?.learnedAt && !carryover.includes(word.id) && !savedCandidateSet.has(word.id));
     const dueAllIds = getDueIds();
     const plan = buildDailyPlan(dueAllIds, spellingProgressMap(dueAllIds), state.settings.dailyGoal);
     const plannedCarryover = carryover.slice(0, plan.newLimit);
-    const slots = Math.max(0, plan.newLimit - plannedCarryover.length);
+    const savedCandidates = pendingSavedTrainingIds(plannedCarryover);
+    const plannedSavedIds = savedCandidates.slice(0, Math.min(3, Math.max(0, plan.newLimit - plannedCarryover.length)));
+    const slots = Math.max(0, plan.newLimit - plannedCarryover.length - plannedSavedIds.length);
     const selectedPool = state.settings.bank === "movers"
       ? sortMoversWords(unseen)
       : seededShuffle(unseen, `kevin:${todayKey}:${state.settings.bank}`);
     const selected = selectedPool.slice(0, slots).map((word) => word.id);
-    const newIds = [...plannedCarryover, ...selected];
+    const newIds = [...plannedCarryover, ...plannedSavedIds, ...selected];
 
     state.today = {
       date: todayKey,
@@ -1498,7 +1557,10 @@
       newLimit: plan.newLimit,
       estimatedMinutes: Math.min(DAILY_TIME_BUDGET_MINUTES, Math.ceil(plan.plannedReviewIds.length * REVIEW_ESTIMATE_MINUTES + newIds.length * NEW_WORD_ESTIMATE_MINUTES)),
       newIds,
-      deferredNewIds: carryover.filter((id) => !plannedCarryover.includes(id)),
+      deferredNewIds: [
+        ...carryover.filter((id) => !plannedCarryover.includes(id)),
+        ...savedCandidates.filter((id) => !plannedSavedIds.includes(id))
+      ],
       carryoverIds: plannedCarryover,
       learnedIds: carryLearned.filter((id) => newIds.includes(id)),
       practicedIds: [],
@@ -1586,14 +1648,15 @@
     }
     if (state.today.bank === "core2000") {
       const batch = coreBatchById(state.today.coreBatchId) || coreBatchInfo(state.settings.coreBatch);
-      const allowedIds = new Set(batch?.wordIds || []);
+      const courseIds = new Set(batch?.wordIds || []);
+      const allowedIds = new Set([...courseIds, ...savedTrainingIds(), ...state.today.newIds]);
       state.today.practiceMode = "mixed";
       state.today.sprint = null;
       state.today.coreBatchId = batch?.id || null;
       state.today.coreExerciseId = batch?.exercise?.id || null;
       state.today.newIds = [...new Set(state.today.newIds.filter((id) => allowedIds.has(id)))];
       state.today.goal = state.today.newIds.length;
-      const pendingSetIds = (batch?.wordIds || []).filter((id) => {
+      const pendingSetIds = [...courseIds].filter((id) => {
         const progress = state.progress[id];
         return !progress?.dueAt && (!progress?.learnedAt || progress.status === "learning");
       });
@@ -1615,7 +1678,7 @@
       return;
     }
     state.today.sprint = null;
-    const allowedNewIds = bankWordIds(state.today.bank);
+    const allowedNewIds = new Set([...allowedDailyNewIds(state.today.bank), ...state.today.newIds]);
     state.today.newIds = [...new Set(state.today.newIds.filter((id) => allowedNewIds.has(id)))];
     const missingBacklog = (window.WORD_BANKS?.[state.today.bank] || [])
       .filter((word) => {
@@ -1651,18 +1714,20 @@
     if (state.today.bank !== "movers") return;
     const orderedMovers = sortMoversWords(window.WORD_BANKS?.movers || []);
     const moverIds = new Set(orderedMovers.map((word) => word.id));
-    const previousIds = state.today.newIds.filter((id) => moverIds.has(id));
+    const allPreviousIds = [...state.today.newIds];
+    const previousIds = allPreviousIds.filter((id) => moverIds.has(id));
+    const externalIds = allPreviousIds.filter((id) => !moverIds.has(id));
     const previousCursor = Math.max(
       0,
-      Math.min(state.today.studyCursor, Math.max(0, previousIds.length - 1))
+      Math.min(state.today.studyCursor, Math.max(0, allPreviousIds.length - 1))
     );
-    const currentWordId = previousIds[previousCursor] || null;
+    const currentWordId = allPreviousIds[previousCursor] || null;
     if (state.today.planVersion === DAILY_PLAN_VERSION) {
-      state.today.newIds = sortMoversIds(previousIds);
-      state.today.deferredNewIds = sortMoversIds(state.today.deferredNewIds.filter((id) => moverIds.has(id) && !state.today.newIds.includes(id)));
-      state.today.carryoverIds = sortMoversIds(state.today.carryoverIds.filter((id) => state.today.newIds.includes(id)));
-      state.today.learnedIds = sortMoversIds(state.today.learnedIds.filter((id) => state.today.newIds.includes(id)));
-      state.today.practicedIds = sortMoversIds(state.today.practicedIds.filter((id) => state.today.newIds.includes(id)));
+      state.today.newIds = [...externalIds, ...sortMoversIds(previousIds)];
+      state.today.deferredNewIds = [...new Set(state.today.deferredNewIds.filter((id) => !state.today.newIds.includes(id)))];
+      state.today.carryoverIds = state.today.carryoverIds.filter((id) => state.today.newIds.includes(id));
+      state.today.learnedIds = state.today.learnedIds.filter((id) => state.today.newIds.includes(id));
+      state.today.practicedIds = state.today.practicedIds.filter((id) => state.today.newIds.includes(id));
       state.today.studyCursor = currentWordId && state.today.newIds.includes(currentWordId)
         ? state.today.newIds.indexOf(currentWordId)
         : Math.max(0, Math.min(state.today.studyCursor, Math.max(0, state.today.newIds.length - 1)));
@@ -2389,6 +2454,7 @@
       practice: renderPractice,
       review: renderReview,
       books: renderBooks,
+      notebook: renderNotebook,
       pk: renderPk,
       settings: renderSettings
     };
@@ -3114,6 +3180,66 @@
       </section>`;
   }
 
+  function renderNotebookWordCard(word, savedEntry = null, isSearchResult = false) {
+    const bankKey = bankKeyForWordId(word.id);
+    const bank = BANK_META[bankKey] || { short: bankKey.toUpperCase(), icon: "📖" };
+    const image = word.visual?.image
+      ? `<img src="${escapeHtml(word.visual.image)}" alt="Picture for ${escapeHtml(word.word)}" loading="lazy" />`
+      : `<span class="notebook-word-emoji" aria-hidden="true">${escapeHtml(word.visual?.emoji || bank.icon || "📖")}</span>`;
+    const sourceTag = savedEntry?.sourceTag || runtime.notebookSource || "Reading";
+    return `<article class="notebook-word-card" data-card-id="${escapeHtml(word.id)}">
+      <div class="notebook-word-visual">${image}</div>
+      <div class="notebook-word-copy">
+        <div class="notebook-word-title"><span class="book-tag">${escapeHtml(bank.icon)} ${escapeHtml(bank.short)}</span>${savedEntry ? `<span class="saved-word-source">${escapeHtml(sourceTag)}</span>` : ""}</div>
+        <h2>${escapeHtml(word.word)}</h2>
+        <p>${escapeHtml(studyDefinitionFor(word) || "Definition unavailable")}</p>
+        ${word.example ? `<small>${escapeHtml(word.example)}</small>` : ""}
+      </div>
+      <div class="notebook-word-actions">
+        ${savedEntry
+          ? `<button class="btn btn-small ${savedEntry.train ? "btn-coral" : "btn-soft"}" type="button" data-action="toggle-saved-training" data-card-id="${escapeHtml(word.id)}">${savedEntry.train ? "✓ 加入训练候选" : "只收藏 · 点此加入训练"}</button><button class="btn btn-small btn-ghost" type="button" data-action="remove-saved-word" data-card-id="${escapeHtml(word.id)}">移除</button>`
+          : `<button class="btn btn-small btn-primary" type="button" data-action="save-word" data-card-id="${escapeHtml(word.id)}" data-train="true">收藏并候选训练</button><button class="btn btn-small btn-soft" type="button" data-action="save-word" data-card-id="${escapeHtml(word.id)}" data-train="false">只收藏</button>`}
+      </div>
+    </article>`;
+  }
+
+  function renderNotebook() {
+    const query = normalizeAnswer(runtime.notebookQuery).trim();
+    const savedEntries = Object.values(state.savedWords || {})
+      .sort((left, right) => right.addedAt - left.addedAt || left.cardId.localeCompare(right.cardId));
+    const savedCards = savedEntries
+      .map((entry) => getWord(entry.cardId))
+      .filter(Boolean)
+      .map((word) => renderNotebookWordCard(word, state.savedWords[word.id]))
+      .join("");
+    const searchResults = query.length < 2
+      ? []
+      : allWords()
+        .filter((word) => {
+          const haystack = normalizeAnswer(`${word.word} ${studyDefinitionFor(word)} ${(word.pos || []).join?.(" ") || word.pos || ""}`);
+          return haystack.includes(query);
+        })
+        .sort((left, right) => {
+          const leftExact = normalizeAnswer(left.word) === query ? 0 : 1;
+          const rightExact = normalizeAnswer(right.word) === query ? 0 : 1;
+          return leftExact - rightExact || left.word.localeCompare(right.word) || left.id.localeCompare(right.id);
+        })
+        .slice(0, 24);
+    const resultCards = searchResults
+      .map((word) => renderNotebookWordCard(word, state.savedWords[word.id], true))
+      .join("");
+    const trainingCount = savedEntries.filter((entry) => entry.train).length;
+    return `<section class="view-page notebook-page">
+      <div class="page-heading"><div><p class="eyebrow">READING WORD NOTEBOOK</p><h1>把阅读里遇见的词，放进 Kevin 的地图</h1><p>先搜索四个完整词库；收藏原卡不会复制进度，同一拼写继续共用一份记忆计划。</p></div><span class="date-stamp">${savedEntries.length} SAVED · ${trainingCount} TRAINING</span></div>
+      <section class="paper-card notebook-search-panel">
+        <div class="notebook-search-row"><label class="search-box"><span aria-hidden="true">⌕</span><input id="notebookSearch" type="search" autocomplete="off" placeholder="输入单词或英文释义，例如 accident" value="${escapeHtml(runtime.notebookQuery)}" /></label><label class="notebook-source-field"><span>来源</span><input id="notebookSource" type="text" maxlength="80" value="${escapeHtml(runtime.notebookSource)}" placeholder="Dragon Masters / EF / Reading" /></label></div>
+        <p class="feature-note">“收藏并候选训练”每次最多优先安排 3 个，并占用同一个每日新词额度；今天的冻结计划不会被临时加量。</p>
+      </section>
+      ${query.length >= 2 ? `<section class="notebook-section"><div class="card-head"><div><h2>搜索结果</h2><p>${searchResults.length ? `找到 ${searchResults.length} 张匹配词义卡` : "没有匹配的现有词条"}</p></div></div><div class="notebook-word-grid">${resultCards || `<div class="book-empty">暂时找不到；自定义新词功能将在下一步加入。</div>`}</div></section>` : ""}
+      <section class="notebook-section"><div class="card-head"><div><h2>我的阅读生词</h2><p>每张来源卡独立保留词义，同拼写共享拼写复习。</p></div><span class="book-tag">${trainingCount} 个等待训练</span></div><div class="notebook-word-grid">${savedCards || `<div class="book-empty">还没有收藏。先在上方搜索 Kevin 阅读时遇到的词吧。</div>`}</div></section>
+    </section>`;
+  }
+
   function renderCoreCoursePicker() {
     const batch = coreBatchInfo();
     const first = getWord(batch?.wordIds?.[0]);
@@ -3791,6 +3917,40 @@
     render();
   }
 
+  function saveWordToNotebook(cardId, train) {
+    const word = getWord(cardId);
+    if (!word) return;
+    const sourceTag = safeText(runtime.notebookSource, "Reading", 80).trim() || "Reading";
+    state.savedWords[word.id] = {
+      cardId: word.id,
+      sourceTag,
+      train: Boolean(train),
+      addedAt: state.savedWords[word.id]?.addedAt || Date.now()
+    };
+    saveState();
+    render();
+    toast(train ? `${word.word} 已加入后续训练候选` : `${word.word} 已收藏`, train ? "✦" : "♡");
+  }
+
+  function toggleSavedWordTraining(cardId) {
+    const entry = state.savedWords[canonicalWordId(cardId)];
+    if (!entry) return;
+    entry.train = !entry.train;
+    saveState();
+    render();
+    toast(entry.train ? "已加入后续训练候选" : "已改为只收藏", entry.train ? "✦" : "♡");
+  }
+
+  function removeSavedWord(cardId) {
+    const id = canonicalWordId(cardId);
+    const word = getWord(id);
+    if (!state.savedWords[id]) return;
+    delete state.savedWords[id];
+    saveState();
+    render();
+    toast(`${word?.word || "这个词"} 已移出阅读生词本；学习记录仍然保留`, "✓");
+  }
+
   function showDialog(content) {
     dialogBody.innerHTML = content;
     if (!dialog.open) dialog.showModal();
@@ -4052,6 +4212,9 @@
     else if (action === "start-sprint-stage") startSprintStage();
     else if (action === "practice-hint") givePracticeHint();
     else if (action === "select-bank") chooseBank(target.dataset.bank);
+    else if (action === "save-word") saveWordToNotebook(target.dataset.cardId, target.dataset.train === "true");
+    else if (action === "toggle-saved-training") toggleSavedWordTraining(target.dataset.cardId);
+    else if (action === "remove-saved-word") removeSavedWord(target.dataset.cardId);
     else if (action === "core-batch-prev") applyCoreBatch((state.settings.coreBatch || 1) - 1);
     else if (action === "core-batch-next") applyCoreBatch((state.settings.coreBatch || 1) + 1);
     else if (action === "save-core-batch") applyCoreBatch(document.getElementById("coreBatchInput")?.value, true);
@@ -4114,6 +4277,18 @@
       const emptyMessage = document.getElementById("bookEmpty");
       if (emptyMessage) emptyMessage.hidden = visibleCards > 0;
     }
+    if (input.id === "notebookSearch") {
+      runtime.notebookQuery = input.value;
+      window.clearTimeout(runtime.notebookSearchTimer);
+      runtime.notebookSearchTimer = window.setTimeout(() => {
+        if (route !== "notebook") return;
+        render();
+        const search = document.getElementById("notebookSearch");
+        search?.focus();
+        search?.setSelectionRange(search.value.length, search.value.length);
+      }, 120);
+    }
+    if (input.id === "notebookSource") runtime.notebookSource = safeText(input.value, "Reading", 80);
     if (input.classList.contains("core-exercise-answer")) {
       const exerciseId = state.today?.coreExerciseId;
       if (exerciseId) {
@@ -4309,7 +4484,7 @@
   window.addEventListener("hashchange", () => {
     stopSpeech();
     const requested = window.location.hash.slice(1);
-    route = ["home", "learn", "practice", "review", "books", "pk", "settings"].includes(requested) ? requested : "home";
+    route = ["home", "learn", "practice", "review", "books", "notebook", "pk", "settings"].includes(requested) ? requested : "home";
     render();
   });
   window.addEventListener("storage", (event) => {
@@ -4337,6 +4512,8 @@
     canonicalWordId,
     lexemeIdForWord,
     sanitizeAttemptEvents,
+    sanitizeSavedWords,
+    savedTrainingIds,
     practiceCueType,
     practiceGradeForTask,
     createAttemptEvent,
@@ -4399,7 +4576,7 @@
   state = loadState();
   ensureToday();
   const requestedRoute = window.location.hash.slice(1);
-  route = ["home", "learn", "practice", "review", "books", "pk", "settings"].includes(requestedRoute) ? requestedRoute : "home";
+  route = ["home", "learn", "practice", "review", "books", "notebook", "pk", "settings"].includes(requestedRoute) ? requestedRoute : "home";
   if (!window.location.hash) window.history.replaceState(null, "", "#home");
   render();
 })();

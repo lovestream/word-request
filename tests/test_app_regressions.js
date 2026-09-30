@@ -522,6 +522,42 @@ assert.equal(sharedLexemeState.lexemeProgress[truckLexemeId].status, "relearning
 assert.equal(sharedLexemeState.lexemeProgress[truckLexemeId].step, 0);
 assert.equal(api.initialScheduleNeeded(sharedLexemeState.lexemeProgress[truckLexemeId], true), false, "studying the same spelling from another source must not reset its schedule");
 
+const savedWordState = api.mergeState({
+  ...baseBackup,
+  savedWords: {
+    "ket:test": { cardId: "ket:test", sourceTag: "Dragon Masters", train: true, addedAt: 123 },
+    "missing:test": { cardId: "missing:test", sourceTag: "Unknown", train: true, addedAt: 124 }
+  },
+  today: null
+}, true);
+assert.deepEqual(JSON.parse(JSON.stringify(savedWordState.savedWords)), {
+  "ket:test": { cardId: "ket:test", sourceTag: "Dragon Masters", train: true, addedAt: 123 }
+});
+assert.deepEqual(Array.from(api.savedTrainingIds(savedWordState)), ["ket:test"]);
+
+const frozenSavedWordPlan = api.mergeState({
+  ...baseBackup,
+  savedWords: {},
+  today: {
+    ...baseBackup.today,
+    planVersion: 1,
+    newLimit: 1,
+    newIds: ["core2000:truck"],
+    learnedIds: [],
+    dueIds: [],
+    dueAllIds: [],
+    plannedReviewIds: [],
+    baselineDueIds: [],
+    reviewBacklogIds: [],
+    tasks: []
+  }
+}, true);
+assert.deepEqual(
+  Array.from(frozenSavedWordPlan.today.newIds),
+  ["core2000:truck"],
+  "removing a saved-word tag must not rewrite an already frozen daily plan"
+);
+
 const duplicateNewBackup = {
   ...baseBackup,
   progress: {
