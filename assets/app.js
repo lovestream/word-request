@@ -2375,6 +2375,23 @@
       .replaceAll("'", "&#039;");
   }
 
+  function missingAssetLabel(image) {
+    if (image?.closest?.(".core-workbook-page")) return "Original exercise image is unavailable in this copy. The answer sheet still works.";
+    if (image?.closest?.(".core-reading")) return "Optional reading image is unavailable in this copy.";
+    return "Picture unavailable — use the English clue and audio.";
+  }
+
+  function replaceMissingImage(image) {
+    if (!image || image.dataset?.assetFallback === "true") return;
+    image.dataset.assetFallback = "true";
+    image.hidden = true;
+    const placeholder = document.createElement("div");
+    placeholder.className = "asset-missing-placeholder";
+    placeholder.setAttribute("role", "img");
+    placeholder.textContent = missingAssetLabel(image);
+    image.insertAdjacentElement("afterend", placeholder);
+  }
+
   function safeColor(value, fallback) {
     return /^#[0-9a-f]{6}$/i.test(value || "") ? value : fallback;
   }
@@ -4973,6 +4990,10 @@
     (cells[position] || cells.at(-1))?.focus();
   });
 
+  document.addEventListener("error", (event) => {
+    if (event.target?.tagName === "IMG") replaceMissingImage(event.target);
+  }, true);
+
   document.addEventListener("change", (event) => {
     const input = event.target;
     if (input.name === "dailyGoal") applyDailyGoal(input.value);
@@ -5087,6 +5108,7 @@
     dailyPlanMetrics,
     ordinaryHomeAction,
     learningMetrics,
+    missingAssetLabel,
     localWeekKey,
     weeklyCheckPlan,
     weeklyCheckOptions,

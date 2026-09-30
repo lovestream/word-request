@@ -1178,6 +1178,21 @@ button:disabled {
   object-fit: contain;
 }
 
+.asset-missing-placeholder {
+  display: grid;
+  min-height: 160px;
+  padding: 24px;
+  place-items: center;
+  color: var(--ink-soft);
+  border: 1px dashed var(--line);
+  border-radius: 18px;
+  background: repeating-linear-gradient(-45deg, rgba(255, 250, 240, 0.9), rgba(255, 250, 240, 0.9) 10px, rgba(97, 197, 207, 0.08) 10px, rgba(97, 197, 207, 0.08) 20px);
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1.55;
+  text-align: center;
+}
+
 .source-picture-frame figcaption {
   display: flex;
   width: 100%;

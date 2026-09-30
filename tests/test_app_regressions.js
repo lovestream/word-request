@@ -120,6 +120,8 @@ assert.equal(api.quizClueFor({ word: "blood", quizClue: "Blood is the red liquid
 assert.equal(api.quizClueFor({ word: "truck", acceptedAnswers: ["lorry"], quizClue: "A large road vehicle for carrying goods." }), "A large road vehicle for carrying goods.");
 assert.equal(api.quizClueFor({ word: "truck", acceptedAnswers: ["lorry"], quizClue: "Another word for a lorry." }), "", "accepted answers must also stay out of quiz clues");
 assert.equal(api.quizClueFor({ word: "website", quizClue: "Websites can contain many pages." }), "", "common inflections must not reveal the target");
+assert.match(api.missingAssetLabel({ closest: (selector) => selector === ".core-workbook-page" }), /answer sheet still works/i);
+assert.match(api.missingAssetLabel({ closest: () => false }), /English clue and audio/i);
 assert.deepEqual(Array.from(api.semanticAlternativesFor(testWord)), ["lorry"]);
 assert.deepEqual(Array.from(api.spellingAnswersFor(testWord)), ["truck"], "a synonym must not pass a target-word spelling test");
 assert.deepEqual(Array.from(api.spellingAnswersFor({ word: "colour", spellingVariants: ["color"] })), ["colour", "color"]);
