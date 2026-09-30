@@ -2153,6 +2153,123 @@ button:disabled {
   gap: 8px;
 }
 
+.custom-word-panel {
+  margin-top: 28px;
+}
+
+.custom-word-form {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+  margin-top: 18px;
+}
+
+.custom-word-form label {
+  display: grid;
+  gap: 7px;
+  color: var(--ink-soft);
+  font-size: 10px;
+  font-weight: 900;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+}
+
+.custom-word-form .custom-wide {
+  grid-column: 1 / -1;
+}
+
+.custom-word-form input,
+.custom-word-form textarea {
+  width: 100%;
+  padding: 12px 14px;
+  color: var(--forest);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  outline: none;
+  background: var(--paper);
+  font: inherit;
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: 0;
+  line-height: 1.45;
+  text-transform: none;
+}
+
+.custom-word-form input:focus,
+.custom-word-form textarea:focus {
+  border-color: var(--aqua);
+  box-shadow: 0 0 0 3px rgba(97, 197, 207, 0.15);
+}
+
+.custom-word-controls {
+  display: flex;
+  gap: 14px;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 16px;
+}
+
+.custom-train-choice {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  color: var(--ink-soft);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.custom-train-choice input {
+  width: 18px;
+  height: 18px;
+  accent-color: var(--coral);
+}
+
+.custom-word-preview blockquote {
+  margin: 14px 0;
+  padding: 12px 16px;
+  color: var(--forest);
+  border-left: 4px solid var(--aqua);
+  border-radius: 0 12px 12px 0;
+  background: rgba(97, 197, 207, 0.1);
+  font-family: var(--display);
+  font-size: 18px;
+}
+
+.custom-preview-image {
+  width: 112px;
+  height: 112px;
+  object-fit: cover;
+  border-radius: 24px 24px 24px 8px;
+}
+
+.archived-word-section {
+  padding-bottom: 8px;
+}
+
+.archived-word-row {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 0;
+  border-top: 1px dashed var(--line);
+}
+
+.archived-word-row div {
+  display: grid;
+  gap: 3px;
+}
+
+.archived-word-row strong {
+  color: var(--forest);
+  font-family: var(--display);
+}
+
+.archived-word-row span {
+  color: var(--ink-soft);
+  font-size: 12px;
+}
+
 .book-meta {
   display: flex;
   width: 100%;
@@ -4333,8 +4450,19 @@ button:disabled {
   }
 
   .notebook-search-row,
-  .notebook-word-grid {
+  .notebook-word-grid,
+  .custom-word-form {
     grid-template-columns: 1fr;
+  }
+
+  .custom-word-form .custom-wide {
+    grid-column: auto;
+  }
+
+  .custom-word-controls,
+  .archived-word-row {
+    align-items: stretch;
+    flex-direction: column;
   }
 }
 

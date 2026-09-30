@@ -5,7 +5,7 @@
   const BACKUP_KEY = "kevin-wordquest:backup:v1";
   const BACKUP_FORMAT = "kevin-word-quest-portable-record";
   const BACKUP_FORMAT_VERSION = 1;
-  const APP_VERSION = "2026.09.29";
+  const APP_VERSION = "2026.09.30";
   const DEVICE_KEY = "kevin-wordquest:device-id:v1";
   const DAY_MS = 86_400_000;
   const WRITER_ID = window.crypto?.randomUUID?.() || `tab-${Date.now()}-${Math.random().toString(36).slice(2)}`;
@@ -83,6 +83,7 @@
   let cachedWordIndex = null;
   let cachedBankWordIds = null;
   let cachedLexemeMembers = null;
+  let customCatalogOverride = null;
   const runtime = {
     breakdownOpen: false,
     feedback: null,
@@ -92,6 +93,8 @@
     bookQuery: "",
     notebookQuery: "",
     notebookSource: "Reading",
+    editingCustomId: null,
+    pendingCustomDraft: null,
     practiceResult: null,
     practiceSource: null,
     pk: null,
@@ -109,6 +112,8 @@
     runtime.bookQuery = "";
     runtime.notebookQuery = "";
     runtime.notebookSearchTimer = null;
+    runtime.editingCustomId = null;
+    runtime.pendingCustomDraft = null;
     runtime.practiceResult = null;
     runtime.practiceSource = null;
     runtime.pk = null;
@@ -161,6 +166,7 @@
       scoreLedger: [],
       attemptEvents: [],
       attemptSequence: 0,
+      customWords: {},
       savedWords: {},
       today: null,
       history: [],
@@ -828,6 +834,73 @@
     return result;
   }
 
+  function safeCustomImage(value) {
+    const image = safeText(value, "", 500).trim();
+    if (!image) return "";
+    if (/^https:\/\/[^\s]+$/i.test(image)) return image;
+    if (/^assets\/[a-z0-9_./-]+$/i.test(image) && !image.includes("..")) return image;
+    return "";
+  }
+
+  function sanitizeCustomWordDraft(raw, existingId = "") {
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+    const word = safeText(raw.word, "", 80).trim().replace(/\s+/g, " ");
+    const en = safeText(raw.en, "", 320).trim().replace(/\s+/g, " ");
+    const example = safeText(raw.example, "", 320).trim().replace(/\s+/g, " ");
+    const sourceTag = safeText(raw.sourceTag, "Reading", 80).trim() || "Reading";
+    if (!/^[a-z][a-z' -]{0,78}$/i.test(word) || !en || !example) return null;
+    const id = /^custom:[a-z0-9-]{6,100}$/i.test(existingId || raw.id || "")
+      ? (existingId || raw.id)
+      : "";
+    const pos = safeText(raw.pos, "", 40).trim();
+    const context = safeText(raw.context, "", 320).trim().replace(/\s+/g, " ");
+    const image = safeCustomImage(raw.image || raw.visual?.image);
+    const spellingParts = word.split(/([ '-])/).filter(Boolean).flatMap((part) =>
+      /^[a-z]+$/i.test(part) && part.length > 4
+        ? part.match(/.{1,3}/g) || [part]
+        : [part]
+    );
+    return {
+      id,
+      word,
+      pos,
+      en,
+      example,
+      context,
+      sourceTag,
+      englishOnly: true,
+      acceptedAnswers: [],
+      semanticAlternatives: [],
+      spellingVariants: [],
+      quizClue: en,
+      visual: image ? { image } : { emoji: "📖" },
+      breakdown: {
+        label: "SPELLING CHUNKS",
+        type: "spelling chunks",
+        parts: spellingParts.map((text) => ({ text }))
+      },
+      tip: context || `Picture the scene where you met “${word}”.`,
+      zh: "",
+      ipa: "",
+      custom: true,
+      archived: Boolean(raw.archived),
+      createdAt: finiteNumber(raw.createdAt, Date.now(), 0, 9_999_999_999_999),
+      updatedAt: finiteNumber(raw.updatedAt, Date.now(), 0, 9_999_999_999_999)
+    };
+  }
+
+  function sanitizeCustomWords(raw) {
+    const result = {};
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return result;
+    for (const [rawId, item] of Object.entries(raw)) {
+      if (!/^custom:[a-z0-9-]{6,100}$/i.test(rawId)) continue;
+      const word = sanitizeCustomWordDraft(item, rawId);
+      if (!word) continue;
+      result[rawId] = word;
+    }
+    return result;
+  }
+
   function sanitizeSavedWords(raw) {
     const result = {};
     if (!raw || typeof raw !== "object" || Array.isArray(raw)) return result;
@@ -907,6 +980,10 @@
     )) {
       throw new Error("学习记录缺少必要字段");
     }
+    const customWords = sanitizeCustomWords(raw.customWords);
+    const previousCatalogOverride = customCatalogOverride;
+    customCatalogOverride = customWords;
+    try {
     const rawSettings = raw.settings && typeof raw.settings === "object" ? raw.settings : {};
     const bank = safeBank(rawSettings.bank, fresh.settings.bank);
     const rawSprintDays = rawSettings.sprintDays && typeof rawSettings.sprintDays === "object" && !Array.isArray(rawSettings.sprintDays)
@@ -991,12 +1068,16 @@
         safeInteger(raw.attemptSequence, 0, 0, 1_000_000_000),
         maxDeviceAttemptSequence
       ),
+      customWords,
       savedWords,
       history,
       dailyCompletion: sanitizeDailyCompletion(raw.dailyCompletion),
       courseCompletion: sanitizeCourseCompletion(raw.courseCompletion),
       today: sanitizeToday(raw.today, settings, progress, lexemeProgress, savedWords)
     };
+    } finally {
+      customCatalogOverride = previousCatalogOverride;
+    }
   }
 
   function loadState() {
@@ -1157,11 +1238,22 @@
   }
 
   function allWords() {
-    return Object.keys(BANK_META).flatMap((key) => window.WORD_BANKS?.[key] || []);
+    const customWords = Object.values(customCatalogOverride || state?.customWords || {}).filter((word) => !word.archived);
+    return [...Object.keys(BANK_META).flatMap((key) => window.WORD_BANKS?.[key] || []), ...customWords];
+  }
+
+  function invalidateCustomCatalog() {
+    cachedLexemeMembers = null;
   }
 
   function wordIndex() {
-    if (!cachedWordIndex) cachedWordIndex = new Map(allWords().map((word) => [word.id, word]));
+    if (!cachedWordIndex) {
+      cachedWordIndex = new Map(
+        Object.keys(BANK_META)
+          .flatMap((key) => window.WORD_BANKS?.[key] || [])
+          .map((word) => [word.id, word])
+      );
+    }
     return cachedWordIndex;
   }
 
@@ -1177,7 +1269,8 @@
   }
 
   function getWord(id) {
-    return wordIndex().get(canonicalWordId(id));
+    const canonicalId = canonicalWordId(id);
+    return (customCatalogOverride || state?.customWords || {})[canonicalId] || wordIndex().get(canonicalId);
   }
 
   function lexemeIdForWord(wordOrId) {
@@ -1209,6 +1302,7 @@
   }
 
   function bankKeyForWordId(wordId) {
+    if (getWord(wordId)?.custom) return "custom";
     return Object.keys(BANK_META).find((bankKey) => bankWordIds(bankKey).has(canonicalWordId(wordId))) || "";
   }
 
@@ -1268,7 +1362,8 @@
     const allowed = bankKey ? bankWordIds(bankKey) : null;
     const representatives = new Map();
     for (const id of Object.keys(state.progress)) {
-      if (!getWord(id) || (allowed && !allowed.has(id))) continue;
+      const word = getWord(id);
+      if (!word || word.archived || (allowed && !allowed.has(id))) continue;
       const progress = spellingProgress(id);
       if (!isDue(progress, now)) continue;
       const lexemeId = lexemeIdForWord(id);
@@ -2152,7 +2247,7 @@
       return `
         <figure class="source-picture-frame">
           <img src="${escapeHtml(word.visual.image)}" alt="${escapeHtml(word.englishOnly ? `Book picture for ${word.word}` : `${word.word}：${word.zh}`)}" draggable="false" />
-          <figcaption><span>${word.englishOnly ? "ORIGINAL BOOK IMAGE" : isCommonsImage ? `开放配图 · 短语 ${escapeHtml(word.sourceNumber)}` : "PDF 原图"}</span>${word.englishOnly ? escapeHtml(word.visual.source || "2000 Core English Words") : sourceCredit}</figcaption>
+          <figcaption><span>${word.custom ? "PARENT-SELECTED IMAGE" : word.englishOnly ? "ORIGINAL BOOK IMAGE" : isCommonsImage ? `开放配图 · 短语 ${escapeHtml(word.sourceNumber)}` : "PDF 原图"}</span>${word.custom ? escapeHtml(word.sourceTag || "Reading") : word.englishOnly ? escapeHtml(word.visual.source || "2000 Core English Words") : sourceCredit}</figcaption>
         </figure>`;
     }
     const first = safeColor(word.visual?.color1, "#61c5cf");
@@ -3180,9 +3275,9 @@
       </section>`;
   }
 
-  function renderNotebookWordCard(word, savedEntry = null, isSearchResult = false) {
+  function renderNotebookWordCard(word, savedEntry = null) {
     const bankKey = bankKeyForWordId(word.id);
-    const bank = BANK_META[bankKey] || { short: bankKey.toUpperCase(), icon: "📖" };
+    const bank = BANK_META[bankKey] || { short: word.custom ? "MY WORD" : bankKey.toUpperCase(), icon: "📖" };
     const image = word.visual?.image
       ? `<img src="${escapeHtml(word.visual.image)}" alt="Picture for ${escapeHtml(word.word)}" loading="lazy" />`
       : `<span class="notebook-word-emoji" aria-hidden="true">${escapeHtml(word.visual?.emoji || bank.icon || "📖")}</span>`;
@@ -3197,10 +3292,37 @@
       </div>
       <div class="notebook-word-actions">
         ${savedEntry
-          ? `<button class="btn btn-small ${savedEntry.train ? "btn-coral" : "btn-soft"}" type="button" data-action="toggle-saved-training" data-card-id="${escapeHtml(word.id)}">${savedEntry.train ? "✓ 加入训练候选" : "只收藏 · 点此加入训练"}</button><button class="btn btn-small btn-ghost" type="button" data-action="remove-saved-word" data-card-id="${escapeHtml(word.id)}">移除</button>`
+          ? `<button class="btn btn-small ${savedEntry.train ? "btn-coral" : "btn-soft"}" type="button" data-action="toggle-saved-training" data-card-id="${escapeHtml(word.id)}">${savedEntry.train ? "✓ 加入训练候选" : "只收藏 · 点此加入训练"}</button>${word.custom ? `<button class="btn btn-small btn-soft" type="button" data-action="edit-custom-word" data-card-id="${escapeHtml(word.id)}">纠正内容</button><button class="btn btn-small btn-ghost" type="button" data-action="archive-custom-word" data-card-id="${escapeHtml(word.id)}">归档</button>` : `<button class="btn btn-small btn-ghost" type="button" data-action="remove-saved-word" data-card-id="${escapeHtml(word.id)}">移除</button>`}`
           : `<button class="btn btn-small btn-primary" type="button" data-action="save-word" data-card-id="${escapeHtml(word.id)}" data-train="true">收藏并候选训练</button><button class="btn btn-small btn-soft" type="button" data-action="save-word" data-card-id="${escapeHtml(word.id)}" data-train="false">只收藏</button>`}
       </div>
     </article>`;
+  }
+
+  function customWordFormValue(word, key) {
+    if (!word) return "";
+    if (key === "image") return word.visual?.image || "";
+    return word[key] || "";
+  }
+
+  function renderCustomWordForm() {
+    const editing = runtime.editingCustomId ? getWord(runtime.editingCustomId) : null;
+    return `<section class="paper-card custom-word-panel">
+      <div class="card-head"><div><p class="eyebrow">PARENT-CHECKED CUSTOM CARD</p><h2>${editing ? `纠正 ${escapeHtml(editing.word)}` : "词库里没有？由家长新建"}</h2><p>只录入 Kevin 真实遇到的词。保存前会先预览，不会自动抓书或生成未经核实的释义。</p></div>${editing ? `<span class="book-tag">EDITING</span>` : `<span class="book-tag">NEW CARD</span>`}</div>
+      <div class="custom-word-form">
+        <label><span>Word / form *</span><input id="customWord" type="text" maxlength="80" value="${escapeHtml(customWordFormValue(editing, "word"))}" placeholder="whispered" /></label>
+        <label><span>Part of speech</span><input id="customPos" type="text" maxlength="40" value="${escapeHtml(customWordFormValue(editing, "pos"))}" placeholder="verb" /></label>
+        <label class="custom-wide"><span>Child-friendly English definition *</span><textarea id="customDefinition" maxlength="320" rows="2" placeholder="spoke very quietly">${escapeHtml(customWordFormValue(editing, "en"))}</textarea></label>
+        <label class="custom-wide"><span>Standard example sentence *</span><textarea id="customExample" maxlength="320" rows="2" placeholder="The dragon whispered a secret.">${escapeHtml(customWordFormValue(editing, "example"))}</textarea></label>
+        <label class="custom-wide"><span>Reading context (optional)</span><textarea id="customContext" maxlength="320" rows="2" placeholder="What was happening when Kevin met this word?">${escapeHtml(customWordFormValue(editing, "context"))}</textarea></label>
+        <label><span>Source *</span><input id="customSource" type="text" maxlength="80" value="${escapeHtml(customWordFormValue(editing, "sourceTag") || runtime.notebookSource)}" placeholder="Dragon Masters" /></label>
+        <label><span>Picture URL (optional)</span><input id="customImage" type="url" maxlength="500" value="${escapeHtml(customWordFormValue(editing, "image"))}" placeholder="https://…" /></label>
+      </div>
+      <div class="custom-word-controls"><label class="custom-train-choice"><input id="customTrain" type="checkbox" ${editing ? (state.savedWords[editing.id]?.train ? "checked" : "") : "checked"} /><span>加入后续训练候选（不会临时增加今天任务）</span></label><div class="notebook-word-actions">${editing ? `<button class="btn btn-small btn-ghost" type="button" data-action="cancel-custom-edit">取消修改</button>` : ""}<button class="btn btn-primary" type="button" data-action="preview-custom-word">先预览，再由家长确认 →</button></div></div>
+    </section>`;
+  }
+
+  function renderArchivedCustomWord(word) {
+    return `<article class="archived-word-row"><div><strong>${escapeHtml(word.word)}</strong><span>${escapeHtml(word.sourceTag)} · ${escapeHtml(word.en)}</span></div><button class="btn btn-small btn-soft" type="button" data-action="restore-custom-word" data-card-id="${escapeHtml(word.id)}">恢复为只收藏</button></article>`;
   }
 
   function renderNotebook() {
@@ -3229,14 +3351,17 @@
       .map((word) => renderNotebookWordCard(word, state.savedWords[word.id], true))
       .join("");
     const trainingCount = savedEntries.filter((entry) => entry.train).length;
+    const archivedCustomWords = Object.values(state.customWords || {}).filter((word) => word.archived);
     return `<section class="view-page notebook-page">
       <div class="page-heading"><div><p class="eyebrow">READING WORD NOTEBOOK</p><h1>把阅读里遇见的词，放进 Kevin 的地图</h1><p>先搜索四个完整词库；收藏原卡不会复制进度，同一拼写继续共用一份记忆计划。</p></div><span class="date-stamp">${savedEntries.length} SAVED · ${trainingCount} TRAINING</span></div>
       <section class="paper-card notebook-search-panel">
         <div class="notebook-search-row"><label class="search-box"><span aria-hidden="true">⌕</span><input id="notebookSearch" type="search" autocomplete="off" placeholder="输入单词或英文释义，例如 accident" value="${escapeHtml(runtime.notebookQuery)}" /></label><label class="notebook-source-field"><span>来源</span><input id="notebookSource" type="text" maxlength="80" value="${escapeHtml(runtime.notebookSource)}" placeholder="Dragon Masters / EF / Reading" /></label></div>
         <p class="feature-note">“收藏并候选训练”每次最多优先安排 3 个，并占用同一个每日新词额度；今天的冻结计划不会被临时加量。</p>
       </section>
-      ${query.length >= 2 ? `<section class="notebook-section"><div class="card-head"><div><h2>搜索结果</h2><p>${searchResults.length ? `找到 ${searchResults.length} 张匹配词义卡` : "没有匹配的现有词条"}</p></div></div><div class="notebook-word-grid">${resultCards || `<div class="book-empty">暂时找不到；自定义新词功能将在下一步加入。</div>`}</div></section>` : ""}
+      ${query.length >= 2 ? `<section class="notebook-section"><div class="card-head"><div><h2>搜索结果</h2><p>${searchResults.length ? `找到 ${searchResults.length} 张匹配词义卡` : "没有匹配的现有词条"}</p></div></div><div class="notebook-word-grid">${resultCards || `<div class="book-empty">没有现成词条，可以在下方由家长新建并预览。</div>`}</div></section>` : ""}
+      ${renderCustomWordForm()}
       <section class="notebook-section"><div class="card-head"><div><h2>我的阅读生词</h2><p>每张来源卡独立保留词义，同拼写共享拼写复习。</p></div><span class="book-tag">${trainingCount} 个等待训练</span></div><div class="notebook-word-grid">${savedCards || `<div class="book-empty">还没有收藏。先在上方搜索 Kevin 阅读时遇到的词吧。</div>`}</div></section>
+      ${archivedCustomWords.length ? `<section class="notebook-section archived-word-section"><div class="card-head"><div><h2>已归档自建词</h2><p>历史仍保留，可随时恢复。</p></div></div>${archivedCustomWords.map(renderArchivedCustomWord).join("")}</section>` : ""}
     </section>`;
   }
 
@@ -3951,6 +4076,122 @@
     toast(`${word?.word || "这个词"} 已移出阅读生词本；学习记录仍然保留`, "✓");
   }
 
+  function readCustomWordDraft() {
+    return sanitizeCustomWordDraft({
+      word: document.getElementById("customWord")?.value,
+      pos: document.getElementById("customPos")?.value,
+      en: document.getElementById("customDefinition")?.value,
+      example: document.getElementById("customExample")?.value,
+      context: document.getElementById("customContext")?.value,
+      sourceTag: document.getElementById("customSource")?.value,
+      image: document.getElementById("customImage")?.value
+    }, runtime.editingCustomId || "");
+  }
+
+  function previewCustomWord() {
+    const draft = readCustomWordDraft();
+    if (!draft) {
+      toast("请填写有效词形、英文释义、例句和来源", "✎");
+      return;
+    }
+    const image = draft.visual?.image
+      ? `<img class="custom-preview-image" src="${escapeHtml(draft.visual.image)}" alt="" />`
+      : `<span class="dialog-icon">📖</span>`;
+    runtime.pendingCustomDraft = {
+      ...draft,
+      train: Boolean(document.getElementById("customTrain")?.checked)
+    };
+    showDialog(`<div class="dialog-content custom-word-preview">${image}<p class="eyebrow">PARENT PREVIEW</p><h2>${escapeHtml(draft.word)}</h2><p><strong>${escapeHtml(draft.pos || "word")}</strong> · ${escapeHtml(draft.en)}</p><blockquote>${escapeHtml(draft.example)}</blockquote>${draft.context ? `<p class="custom-context"><strong>Reading context:</strong> ${escapeHtml(draft.context)}</p>` : ""}<p><strong>Source:</strong> ${escapeHtml(draft.sourceTag)}</p><div class="dialog-actions"><button class="btn btn-soft" type="button" data-action="close-dialog">返回修改</button><button class="btn btn-primary" type="button" data-action="confirm-custom-word">家长确认并保存</button></div></div>`);
+  }
+
+  function customWordId(draft) {
+    const base = `${Date.now().toString(36)}-${hashString(`${draft.word}:${draft.sourceTag}:${Date.now()}:${Math.random()}`).toString(36)}`;
+    return `custom:${base}`;
+  }
+
+  function confirmCustomWord() {
+    const draft = runtime.pendingCustomDraft;
+    if (!draft) return;
+    const existing = runtime.editingCustomId ? state.customWords[runtime.editingCustomId] : null;
+    const id = existing?.id || customWordId(draft);
+    const now = Date.now();
+    const oldLexemeId = existing ? lexemeIdForWord(existing) : "";
+    const updated = {
+      ...draft,
+      id,
+      archived: false,
+      createdAt: existing?.createdAt || now,
+      updatedAt: now
+    };
+    delete updated.train;
+    const newLexemeId = lexemeIdForWord(updated);
+    if (existing && oldLexemeId && newLexemeId && oldLexemeId !== newLexemeId && state.lexemeProgress[oldLexemeId]) {
+      const oldSchedule = state.lexemeProgress[oldLexemeId];
+      const currentNewSchedule = state.lexemeProgress[newLexemeId];
+      if (!currentNewSchedule || progressEvidenceAt(oldSchedule) > progressEvidenceAt(currentNewSchedule)) {
+        state.lexemeProgress[newLexemeId] = { ...oldSchedule };
+      }
+      const oldSpellingStillUsed = allWords().some((word) => word.id !== id && lexemeIdForWord(word) === oldLexemeId);
+      if (!oldSpellingStillUsed) delete state.lexemeProgress[oldLexemeId];
+    }
+    state.customWords[id] = updated;
+    state.savedWords[id] = {
+      cardId: id,
+      sourceTag: updated.sourceTag,
+      train: Boolean(draft.train),
+      addedAt: state.savedWords[id]?.addedAt || now
+    };
+    invalidateCustomCatalog();
+    runtime.editingCustomId = null;
+    runtime.pendingCustomDraft = null;
+    closeDialog();
+    saveState();
+    render();
+    toast(existing ? `${updated.word} 已纠正，历史记录仍然保留` : `${updated.word} 已加入阅读生词本`, existing ? "✓" : "✦");
+  }
+
+  function editCustomWord(cardId) {
+    const word = state.customWords[canonicalWordId(cardId)];
+    if (!word || word.archived) return;
+    runtime.editingCustomId = word.id;
+    runtime.notebookSource = word.sourceTag;
+    render();
+    document.getElementById("customWord")?.focus();
+  }
+
+  function cancelCustomEdit() {
+    runtime.editingCustomId = null;
+    runtime.pendingCustomDraft = null;
+    render();
+  }
+
+  function archiveCustomWord(cardId) {
+    const id = canonicalWordId(cardId);
+    const word = state.customWords[id];
+    if (!word) return;
+    word.archived = true;
+    word.updatedAt = Date.now();
+    delete state.savedWords[id];
+    if (runtime.editingCustomId === id) runtime.editingCustomId = null;
+    invalidateCustomCatalog();
+    saveState();
+    render();
+    toast(`${word.word} 已归档；旧练习与答题证据仍保留`, "🗃️");
+  }
+
+  function restoreCustomWord(cardId) {
+    const id = canonicalWordId(cardId);
+    const word = state.customWords[id];
+    if (!word) return;
+    word.archived = false;
+    word.updatedAt = Date.now();
+    state.savedWords[id] = { cardId: id, sourceTag: word.sourceTag, train: false, addedAt: Date.now() };
+    invalidateCustomCatalog();
+    saveState();
+    render();
+    toast(`${word.word} 已恢复为只收藏`, "♡");
+  }
+
   function showDialog(content) {
     dialogBody.innerHTML = content;
     if (!dialog.open) dialog.showModal();
@@ -3965,6 +4206,7 @@
   function closeDialog() {
     clearPkTimer();
     runtime.pendingImport = null;
+    runtime.pendingCustomDraft = null;
     if (dialog.open) dialog.close();
   }
 
@@ -4077,6 +4319,7 @@
       sourceSavedAt: pending.after.savedAt
     };
     state = candidate;
+    invalidateCustomCatalog();
     resetTransientRuntime();
     runtime.pendingImport = null;
     ensureToday();
@@ -4215,6 +4458,12 @@
     else if (action === "save-word") saveWordToNotebook(target.dataset.cardId, target.dataset.train === "true");
     else if (action === "toggle-saved-training") toggleSavedWordTraining(target.dataset.cardId);
     else if (action === "remove-saved-word") removeSavedWord(target.dataset.cardId);
+    else if (action === "preview-custom-word") previewCustomWord();
+    else if (action === "confirm-custom-word") confirmCustomWord();
+    else if (action === "edit-custom-word") editCustomWord(target.dataset.cardId);
+    else if (action === "cancel-custom-edit") cancelCustomEdit();
+    else if (action === "archive-custom-word") archiveCustomWord(target.dataset.cardId);
+    else if (action === "restore-custom-word") restoreCustomWord(target.dataset.cardId);
     else if (action === "core-batch-prev") applyCoreBatch((state.settings.coreBatch || 1) - 1);
     else if (action === "core-batch-next") applyCoreBatch((state.settings.coreBatch || 1) + 1);
     else if (action === "save-core-batch") applyCoreBatch(document.getElementById("coreBatchInput")?.value, true);
@@ -4512,6 +4761,8 @@
     canonicalWordId,
     lexemeIdForWord,
     sanitizeAttemptEvents,
+    sanitizeCustomWordDraft,
+    sanitizeCustomWords,
     sanitizeSavedWords,
     savedTrainingIds,
     practiceCueType,
@@ -4574,6 +4825,7 @@
     return;
   }
   state = loadState();
+  invalidateCustomCatalog();
   ensureToday();
   const requestedRoute = window.location.hash.slice(1);
   route = ["home", "learn", "practice", "review", "books", "notebook", "pk", "settings"].includes(requestedRoute) ? requestedRoute : "home";

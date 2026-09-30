@@ -535,6 +535,46 @@ assert.deepEqual(JSON.parse(JSON.stringify(savedWordState.savedWords)), {
 });
 assert.deepEqual(Array.from(api.savedTrainingIds(savedWordState)), ["ket:test"]);
 
+const customDraft = api.sanitizeCustomWordDraft({
+  word: "whispered",
+  pos: "verb",
+  en: "spoke very quietly",
+  example: "The dragon whispered a secret.",
+  context: "Kevin found it in Dragon Masters.",
+  sourceTag: "Dragon Masters",
+  image: "javascript:alert(1)"
+});
+assert.equal(customDraft.word, "whispered");
+assert.equal(customDraft.visual.image, undefined, "custom picture input must reject unsafe URL schemes");
+assert.ok(customDraft.breakdown.parts.length > 1, "custom cards need safe visual spelling chunks for the shared study view");
+assert.equal(customDraft.breakdown.type, "spelling chunks");
+assert.equal(api.sanitizeCustomWordDraft({ word: "123", en: "a number", example: "It is 123." }), null);
+
+const customCardId = "custom:whispered-001";
+const customWordState = api.mergeState({
+  ...baseBackup,
+  customWords: {
+    [customCardId]: {
+      ...customDraft,
+      id: customCardId,
+      createdAt: 111,
+      updatedAt: 222
+    }
+  },
+  savedWords: {
+    [customCardId]: { cardId: customCardId, sourceTag: "Dragon Masters", train: true, addedAt: 333 }
+  },
+  progress: {
+    ...baseBackup.progress,
+    [customCardId]: { status: "learning", learnedAt: 444, step: 0, dueAt: null }
+  },
+  today: null
+}, true);
+assert.equal(customWordState.customWords[customCardId].word, "whispered");
+assert.equal(customWordState.savedWords[customCardId].train, true);
+assert.equal(customWordState.progress[customCardId].learnedAt, 444, "custom-card learning history must survive export/import sanitization");
+assert.ok(customWordState.lexemeProgress[api.lexemeIdForWord(customWordState.customWords[customCardId])]);
+
 const frozenSavedWordPlan = api.mergeState({
   ...baseBackup,
   savedWords: {},
