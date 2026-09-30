@@ -2734,6 +2734,10 @@
     document.querySelectorAll("[data-route]").forEach((item) => {
       item.classList.toggle("is-active", item.dataset.route === route);
     });
+    document.querySelector('[data-action="open-more-menu"]')?.classList.toggle(
+      "is-active",
+      ["settings", "parent", "pk"].includes(route)
+    );
   }
 
   function render() {
@@ -3084,14 +3088,77 @@
     return getWord(day.newIds[index]);
   }
 
+  function hasCompletedInitialStudy(wordOrId, source = state) {
+    const wordId = typeof wordOrId === "string" ? wordOrId : wordOrId?.id;
+    const progress = wordId ? source?.progress?.[wordId] : null;
+    if (!progress?.learnedAt) return false;
+    const modes = new Set(progress.initialModesDone || []);
+    return Boolean(progress.dueAt || (modes.has("cloze") && modes.has("full")));
+  }
+
+  function learnAvailability(day, options = {}) {
+    const newIds = Array.isArray(day?.newIds) ? day.newIds : [];
+    const learnedIds = new Set(day?.learnedIds || []);
+    const practicedIds = new Set(day?.practicedIds || []);
+    const reviewRemaining = safeInteger(options.reviewRemaining, 0, 0, 10_000);
+    const allLearned = newIds.length > 0 && newIds.every((id) => learnedIds.has(id));
+    const allPracticed = newIds.length > 0 && newIds.every((id) => practicedIds.has(id));
+
+    if (reviewRemaining > 0 && newIds.length === 0) return { kind: "review-only", reviewRemaining };
+    if (day?.completed || allPracticed) return { kind: "day-complete" };
+    if (allLearned) return { kind: "ready-for-practice" };
+    if (newIds.length > 0) return { kind: "study" };
+    if (options.coreSetComplete && !options.bankComplete) {
+      return { kind: "core-set-complete", nextCoreSetAvailable: Boolean(options.nextCoreSetAvailable) };
+    }
+    if (options.bankComplete) return { kind: "bank-complete" };
+    return { kind: "no-new-today" };
+  }
+
+  function currentLearnAvailability(day = state.today) {
+    const bankWords = window.WORD_BANKS?.[day.bank] || [];
+    const bankComplete = bankWords.length > 0 && bankWords.every((word) => hasCompletedInitialStudy(word));
+    const batch = day.bank === "core2000" ? coreBatchById(day.coreBatchId) : null;
+    const coreSetComplete = Boolean(batch?.wordIds?.length && batch.wordIds.every((id) => hasCompletedInitialStudy(id)));
+    return learnAvailability(day, {
+      reviewRemaining: dailyPlanMetrics(day).reviewRemaining,
+      bankComplete,
+      coreSetComplete,
+      nextCoreSetAvailable: Boolean(batch && batch.sequence < (coreCourse().batches || []).length)
+    });
+  }
+
+  function renderLearnUnavailable(availability) {
+    if (availability.kind === "review-only") {
+      return `<section class="view-page empty-state"><div><span class="empty-icon">🌿</span><h1>今天先守住旧记忆</h1><p>今天的复习量已经比较多，所以系统没有再加入新词。</p><div class="button-row" style="justify-content:center"><button class="btn btn-primary" type="button" data-action="start-review">开始复习 ${availability.reviewRemaining} 个旧词</button><button class="btn btn-soft" type="button" data-route="home">返回今日任务</button></div></div></section>`;
+    }
+    if (availability.kind === "ready-for-practice") {
+      return `<section class="view-page empty-state"><div><span class="empty-icon">✎</span><h1>今天的新词已经看完</h1><p>下一步完成拼写训练。</p><button class="btn btn-primary" type="button" data-route="practice">开始拼写训练</button></div></section>`;
+    }
+    if (availability.kind === "day-complete") {
+      return `<section class="view-page empty-state"><div><span class="empty-icon">🏆</span><h1>今天的词汇任务已经完成</h1><p>不需要再加量，休息会让记忆慢慢长牢。</p><div class="button-row" style="justify-content:center"><button class="btn btn-primary" type="button" data-route="home">返回今日任务</button><button class="btn btn-soft" type="button" data-route="review">查看记忆地图</button></div></div></section>`;
+    }
+    if (availability.kind === "core-set-complete") {
+      const primary = availability.nextCoreSetAvailable
+        ? `<button class="btn btn-primary" type="button" data-action="start-next-core-set">下一 Set →</button>`
+        : `<button class="btn btn-primary" type="button" data-route="books">查看课程地图</button>`;
+      return `<section class="view-page empty-state"><div><span class="empty-icon">📘</span><h1>这个 Set 的新词已经完成</h1><p>整套 Core 课程还没有结束，可以继续下一组十词。</p><div class="button-row" style="justify-content:center">${primary}<button class="btn btn-soft" type="button" data-route="home">返回今日任务</button></div></div></section>`;
+    }
+    if (availability.kind === "bank-complete") {
+      return `<section class="view-page empty-state"><div><span class="empty-icon">🗺️</span><h1>这个词库已经全部学完</h1><p>所有单词都完成了首次学习与拼写，接下来按记忆地图复习。</p><div class="button-row" style="justify-content:center"><button class="btn btn-primary" type="button" data-route="books">选择其他词库</button><button class="btn btn-soft" type="button" data-route="review">去记忆地图</button></div></div></section>`;
+    }
+    return `<section class="view-page empty-state"><div><span class="empty-icon">☀️</span><h1>今天没有安排新词</h1><p>今天的合理学习量已经安排完成，不代表整个词库已经学完。</p><button class="btn btn-primary" type="button" data-route="home">返回今日任务</button></div></section>`;
+  }
+
   function renderLearn() {
     const day = state.today;
     const coreEnglish = isCoreDay(day);
-    if (!day.newIds.length) {
-      return renderEmpty("🗃️", "这个精选词库已经学完啦", "换一本词库继续探险，或者去记忆地图复习已经认识的单词。", "books", "选择新词库");
+    const availability = currentLearnAvailability(day);
+    if (availability.kind !== "study" && !(availability.kind === "ready-for-practice" && runtime.browseStudy)) {
+      return availability.kind === "ready-for-practice" && day.studyCursor >= day.newIds.length - 1
+        ? renderLearnComplete()
+        : renderLearnUnavailable(availability);
     }
-    const allLearned = day.newIds.every((id) => day.learnedIds.includes(id));
-    if (allLearned && !runtime.browseStudy && day.studyCursor >= day.newIds.length - 1) return renderLearnComplete();
     const word = getStudyWord();
     if (!word) return renderEmpty("🧭", "没有找到今天的单词", "返回今日任务重新生成探险路线。", "home", "返回今日任务");
     if (word.id !== runtime.lastWordId) {
@@ -4699,6 +4766,7 @@
     const routeButton = event.target.closest("[data-route]");
     if (routeButton) {
       if (routeButton.dataset.route === "practice") runtime.practiceSource = null;
+      if (dialog.open) closeDialog();
       navigate(routeButton.dataset.route);
       return;
     }
@@ -4765,6 +4833,7 @@
     else if (action === "save-core-batch") applyCoreBatch(document.getElementById("coreBatchInput")?.value, true);
     else if (action === "complete-core-exercise") completeCoreExercise();
     else if (action === "start-next-core-set") startNextCoreSet();
+    else if (action === "open-more-menu") showDialog(`<div class="dialog-content mobile-more-menu"><p class="eyebrow">MORE</p><h2>更多功能</h2><p>家长工具与实验功能放在这里，不会打断 Kevin 的今日学习路线。</p><div class="mobile-more-links"><button class="btn btn-soft" type="button" data-route="settings">⚙ 设置</button><button class="btn btn-soft" type="button" data-route="parent">◎ 家长报告</button><button class="btn btn-soft" type="button" data-route="pk">⚑ PK 试玩</button></div><div class="dialog-actions"><button class="btn btn-primary" type="button" data-action="close-dialog">返回</button></div></div>`);
     else if (action === "save-custom-goal") applyDailyGoal(document.getElementById("customGoal")?.value);
     else if (action === "sprint-prev") applySprintDay(sprintDayFor(state.settings.bank) - 1);
     else if (action === "sprint-next") applySprintDay(sprintDayFor(state.settings.bank) + 1);
@@ -5116,6 +5185,8 @@
     buildDailyPlan,
     dailyPlanMetrics,
     ordinaryHomeAction,
+    hasCompletedInitialStudy,
+    learnAvailability,
     learningMetrics,
     missingAssetLabel,
     localWeekKey,

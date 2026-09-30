@@ -287,6 +287,15 @@ button:disabled {
   gap: 8px;
 }
 
+.nav-group-label {
+  margin: 13px 13px 1px;
+  color: rgba(49, 71, 67, 0.56);
+  font-size: 10px;
+  font-weight: 900;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
 .nav-item {
   position: relative;
   display: flex;
@@ -358,6 +367,17 @@ button:disabled {
   border-radius: 999px;
   font-size: 10px;
   font-weight: 900;
+}
+
+.mobile-more-links {
+  display: grid;
+  gap: 10px;
+  margin-top: 22px;
+}
+
+.mobile-more-links .btn {
+  justify-content: flex-start;
+  min-height: 48px;
 }
 
 .nav-badge {
@@ -4192,7 +4212,7 @@ button:disabled {
     bottom: 0;
     left: 0;
     display: grid;
-    grid-template-columns: repeat(7, 1fr);
+    grid-template-columns: repeat(5, 1fr);
     min-height: 68px;
     padding: 6px max(7px, env(safe-area-inset-left)) calc(6px + env(safe-area-inset-bottom));
     border-top: 1px solid rgba(23, 63, 58, 0.12);

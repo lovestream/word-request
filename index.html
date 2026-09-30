@@ -32,10 +32,10 @@
         </button>
 
         <div class="topbar-stats" aria-label="今日状态">
-          <div class="mini-stat streak-stat" title="连续学习天数">
+          <div class="mini-stat streak-stat" title="累计完成学习任务的天数">
             <span aria-hidden="true">🔥</span>
             <strong id="topStreak">1</strong>
-            <small data-zh="连续" data-en="STREAK">连续</small>
+            <small data-zh="学习日" data-en="DAYS">学习日</small>
           </div>
           <div class="mini-stat coin-stat" title="探险金币">
             <span aria-hidden="true">◉</span>
@@ -58,14 +58,6 @@
             <span class="nav-icon" aria-hidden="true">⌂</span>
             <span data-zh="今日任务" data-en="Today's Quest">今日任务</span>
           </button>
-          <button class="nav-item" type="button" data-route="learn">
-            <span class="nav-icon" aria-hidden="true">✦</span>
-            <span data-zh="学习单词" data-en="Learn Words">学习单词</span>
-          </button>
-          <button class="nav-item" type="button" data-route="practice">
-            <span class="nav-icon" aria-hidden="true">✎</span>
-            <span data-zh="拼写训练" data-en="Spelling">拼写训练</span>
-          </button>
           <button class="nav-item" type="button" data-route="review">
             <span class="nav-icon" aria-hidden="true">↻</span>
             <span data-zh="记忆地图" data-en="Review Map">记忆地图</span>
@@ -79,10 +71,16 @@
             <span class="nav-icon" aria-hidden="true">♡</span>
             <span data-zh="阅读生词本" data-en="My Words">阅读生词本</span>
           </button>
+          <span class="nav-group-label" data-zh="家长与设置" data-en="GROWN-UPS">家长与设置</span>
           <button class="nav-item" type="button" data-route="parent">
             <span class="nav-icon" aria-hidden="true">◎</span>
             <span data-zh="家长报告" data-en="Parent Report">家长报告</span>
           </button>
+          <button class="nav-item" type="button" data-route="settings">
+            <span class="nav-icon" aria-hidden="true">⚙</span>
+            <span data-zh="设置" data-en="Settings">设置</span>
+          </button>
+          <span class="nav-group-label" data-zh="实验功能" data-en="LAB">实验功能</span>
           <button class="nav-item" type="button" data-route="pk">
             <span class="nav-icon" aria-hidden="true">⚑</span>
             <span data-zh="好友 PK" data-en="Word Battle">好友 PK</span>
@@ -102,12 +100,10 @@
 
       <nav class="mobile-nav" aria-label="移动端导航">
         <button class="mobile-nav-item is-active" type="button" data-route="home"><span>⌂</span><span data-zh="今日" data-en="Today">今日</span></button>
-        <button class="mobile-nav-item" type="button" data-route="learn"><span>✦</span><span data-zh="学习" data-en="Learn">学习</span></button>
-        <button class="mobile-nav-item mobile-action" type="button" data-route="practice"><span>✎</span><span data-zh="训练" data-en="Spell">训练</span></button>
         <button class="mobile-nav-item" type="button" data-route="review"><span>↻</span><span data-zh="复习" data-en="Review">复习</span></button>
         <button class="mobile-nav-item" type="button" data-route="books"><span>▤</span><span data-zh="词库" data-en="Books">词库</span></button>
         <button class="mobile-nav-item" type="button" data-route="notebook"><span>♡</span><span data-zh="生词" data-en="Mine">生词</span></button>
-        <button class="mobile-nav-item" type="button" data-route="pk"><span>⚑</span><span data-zh="PK" data-en="Battle">PK</span></button>
+        <button class="mobile-nav-item" type="button" data-action="open-more-menu" aria-haspopup="dialog"><span>•••</span><span data-zh="更多" data-en="More">更多</span></button>
       </nav>
     </div>
 

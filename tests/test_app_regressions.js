@@ -443,6 +443,27 @@ assert.equal(api.ordinaryHomeAction(ordinaryDay, 2).action, "start-review", "ord
 assert.equal(api.ordinaryHomeAction(ordinaryDay, 0).route, "learn");
 assert.equal(api.ordinaryHomeAction({ ...ordinaryDay, pausedAt: 123 }, 2).action, "resume-today");
 
+assert.deepEqual(
+  JSON.parse(JSON.stringify(api.learnAvailability({ newIds: [], learnedIds: [], practicedIds: [] }, { reviewRemaining: 35 }))),
+  { kind: "review-only", reviewRemaining: 35 },
+  "a review-only day must never be described as a completed word bank"
+);
+assert.equal(api.learnAvailability({
+  newIds: ["ket:test"], learnedIds: ["ket:test"], practicedIds: []
+}).kind, "ready-for-practice", "finished picture study must lead into spelling");
+assert.equal(api.learnAvailability({
+  completed: true, newIds: ["ket:test"], learnedIds: ["ket:test"], practicedIds: ["ket:test"]
+}).kind, "day-complete", "a completed day must not invite extra new study");
+assert.equal(api.learnAvailability({
+  newIds: [], learnedIds: [], practicedIds: []
+}, { coreSetComplete: true, nextCoreSetAvailable: true, bankComplete: false }).kind, "core-set-complete");
+assert.equal(api.learnAvailability({
+  newIds: [], learnedIds: [], practicedIds: []
+}, { bankComplete: true }).kind, "bank-complete", "only verified full-bank completion gets the completion message");
+assert.equal(api.learnAvailability({
+  newIds: [], learnedIds: [], practicedIds: []
+}, { bankComplete: false }).kind, "no-new-today");
+
 const metricsNow = new Date(2026, 8, 30, 12, 0, 0).getTime();
 const truckLexeme = api.lexemeIdForWord(testWord);
 const memoryLexeme = api.lexemeIdForWord(coreWord);
