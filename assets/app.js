@@ -95,6 +95,7 @@
     notebookSource: "Reading",
     editingCustomId: null,
     pendingCustomDraft: null,
+    checkupFeedback: null,
     practiceResult: null,
     practiceSource: null,
     pk: null,
@@ -114,6 +115,7 @@
     runtime.notebookSearchTimer = null;
     runtime.editingCustomId = null;
     runtime.pendingCustomDraft = null;
+    runtime.checkupFeedback = null;
     runtime.practiceResult = null;
     runtime.practiceSource = null;
     runtime.pk = null;
@@ -165,6 +167,7 @@
       badges: {},
       scoreLedger: [],
       attemptEvents: [],
+      recognitionEvents: [],
       attemptSequence: 0,
       customWords: {},
       savedWords: {},
@@ -965,6 +968,35 @@
     return [...unique.values()].sort((left, right) => left.occurredAt - right.occurredAt || left.eventId.localeCompare(right.eventId));
   }
 
+  function sanitizeRecognitionEvents(raw) {
+    if (!Array.isArray(raw)) return [];
+    const unique = new Map();
+    for (const item of raw) {
+      if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+      const cardId = canonicalWordId(safeText(item.cardId, "", 220));
+      const selectedCardId = canonicalWordId(safeText(item.selectedCardId, "", 220));
+      if (!getWord(cardId) || !getWord(selectedCardId)) continue;
+      const eventId = safeText(item.eventId, "", 240);
+      if (!/^[a-z0-9:_-]{1,240}$/i.test(eventId) || unique.has(eventId)) continue;
+      const occurredAt = finiteNumber(item.occurredAt, 0, 0, 9_999_999_999_999);
+      unique.set(eventId, {
+        eventId,
+        cardId,
+        selectedCardId,
+        senseId: safeText(item.senseId, `${cardId}:default`, 240),
+        occurredAt,
+        weekKey: safeDateKey(item.weekKey),
+        correct: selectedCardId === cardId && Boolean(item.correct),
+        firstAttempt: true,
+        sessionId: safeText(item.sessionId, "legacy-session", 180),
+        deviceId: safeText(item.deviceId, "legacy-device", 180),
+        sequence: safeInteger(item.sequence, 0, 0, 1_000_000_000),
+        appVersion: safeText(item.appVersion, "unknown", 40)
+      });
+    }
+    return [...unique.values()].sort((left, right) => left.occurredAt - right.occurredAt || left.eventId.localeCompare(right.eventId));
+  }
+
   function mergeState(raw, strict = false) {
     const fresh = defaultState();
     if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
@@ -1039,7 +1071,8 @@
       .slice(-120)
       .map((item) => ({ date: item.date, bank: safeBank(item.bank, settings.bank), learned: safeInteger(item.learned, 0), reviewed: safeInteger(item.reviewed, 0), xp: safeInteger(item.xp, 0) })) : [];
     const attemptEvents = sanitizeAttemptEvents(raw.attemptEvents);
-    const maxDeviceAttemptSequence = attemptEvents.reduce(
+    const recognitionEvents = sanitizeRecognitionEvents(raw.recognitionEvents);
+    const maxDeviceAttemptSequence = [...attemptEvents, ...recognitionEvents].reduce(
       (maximum, event) => event.deviceId === DEVICE_ID ? Math.max(maximum, event.sequence) : maximum,
       0
     );
@@ -1069,6 +1102,7 @@
       badges,
       scoreLedger,
       attemptEvents,
+      recognitionEvents,
       attemptSequence: Math.max(
         safeInteger(raw.attemptSequence, 0, 0, 1_000_000_000),
         maxDeviceAttemptSequence
@@ -1466,6 +1500,8 @@
         .filter(([, item]) => item?.status === "mature" && item.dueAt)
         .map(([lexemeId]) => lexemeId)
     );
+    const recognitionEvents = (source?.recognitionEvents || []).filter((event) => event && event.occurredAt <= now);
+    const recognizedSenses = new Set(recognitionEvents.filter((event) => event.correct).map((event) => event.senseId || `${event.cardId}:default`));
     const events = (source?.attemptEvents || []).filter((event) => event && event.occurredAt <= now);
     const recentEvents = events.filter((event) => event.occurredAt >= thirtyDaysAgo);
     const independentLexemes = new Set(events
@@ -1498,7 +1534,8 @@
     }
     return {
       seen: learnedLexemes.size,
-      recognized: null,
+      recognized: recognitionEvents.length ? recognizedSenses.size : null,
+      recognitionMeasured: recognitionEvents.length > 0,
       independentlySpelled: independentLexemes.size,
       mature: matureLexemes.size,
       new7: [...learnedLexemes.values()].filter((item) => item.learnedAt >= sevenDaysAgo).length,
@@ -1513,8 +1550,47 @@
       activeDays30: activeDays.size,
       backlog: source?.today?.reviewBacklogIds?.length || 0,
       difficultWords: [...difficulty.values()].sort((left, right) => right.score - left.score || left.word.localeCompare(right.word)).slice(0, 8),
-      hasEventEvidence: events.length > 0
+      hasEventEvidence: events.length > 0 || recognitionEvents.length > 0
     };
+  }
+
+  function localWeekKey(date = new Date()) {
+    const monday = new Date(date.getFullYear(), date.getMonth(), date.getDate(), 12);
+    const day = monday.getDay() || 7;
+    monday.setDate(monday.getDate() - day + 1);
+    return localDateKey(monday);
+  }
+
+  function weeklyCheckPlan(source = state, date = new Date()) {
+    const excluded = new Set(source?.today?.newIds || []);
+    const seenLexemes = new Set();
+    const eligible = Object.keys(source?.progress || {}).filter((cardId) => {
+      const word = getWord(cardId);
+      if (!word || word.archived || excluded.has(cardId) || !source.progress[cardId]?.learnedAt) return false;
+      if (!quizClueFor(word) && !word.visual?.image && !word.visual?.emoji) return false;
+      const lexemeId = lexemeIdForWord(word);
+      if (!lexemeId || seenLexemes.has(lexemeId)) return false;
+      seenLexemes.add(lexemeId);
+      return true;
+    });
+    return seededShuffle(eligible, `weekly-check:${localWeekKey(date)}`).slice(0, 5);
+  }
+
+  function weeklyCheckOptions(cardId, plannedIds, weekKey) {
+    const correct = getWord(cardId);
+    if (!correct) return [];
+    const usedWords = new Set([normalizeAnswer(correct.word)]);
+    const distractors = seededShuffle(
+      [...(plannedIds || []).filter((id) => id !== cardId), ...allWords().map((word) => word.id)],
+      `weekly-options:${weekKey}:${cardId}`
+    ).filter((id) => {
+      const word = getWord(id);
+      const normalized = normalizeAnswer(word?.word);
+      if (!word || word.archived || !normalized || usedWords.has(normalized)) return false;
+      usedWords.add(normalized);
+      return true;
+    }).slice(0, 3);
+    return seededShuffle([cardId, ...distractors], `weekly-order:${weekKey}:${cardId}`);
   }
 
   function learnedInBank(bankKey) {
@@ -2632,6 +2708,7 @@
       books: renderBooks,
       notebook: renderNotebook,
       parent: renderParentReport,
+      checkup: renderWeeklyCheckup,
       pk: renderPk,
       settings: renderSettings
     };
@@ -3521,6 +3598,69 @@
     return value == null ? "—" : `${value}${suffix}`;
   }
 
+  function renderWeeklyCheckup() {
+    const weekKey = localWeekKey();
+    const plannedIds = weeklyCheckPlan();
+    if (!plannedIds.length) {
+      return renderEmpty("🔎", "还没有适合独立抽检的旧词", "完成一些新词学习后，这里会每周抽取最多 5 个非当天词。", "home", "返回今日任务");
+    }
+    const weekEvents = state.recognitionEvents.filter((event) => event.weekKey === weekKey && plannedIds.includes(event.cardId));
+    const answered = new Set(weekEvents.map((event) => event.cardId));
+    const feedback = plannedIds.includes(runtime.checkupFeedback?.cardId) ? runtime.checkupFeedback : null;
+    if (!feedback) runtime.checkupFeedback = null;
+    if (!feedback && answered.size >= plannedIds.length) {
+      const correct = weekEvents.filter((event) => event.correct).length;
+      return `<section class="view-page checkup-page"><div class="checkup-complete"><span>🔎</span><p class="eyebrow">WEEKLY INDEPENDENT CHECK</p><h1>本周轻量抽检完成</h1><strong>${correct} / ${plannedIds.length}</strong><p>这里只记录第一次选择；答错不会扣金币，也不会伪装成已经认识。</p><div class="dialog-actions"><button class="btn btn-primary" type="button" data-route="parent">查看家长报告</button><button class="btn btn-soft" type="button" data-route="home">返回今日任务</button></div></div></section>`;
+    }
+    const cardId = feedback?.cardId || plannedIds.find((id) => !answered.has(id));
+    const word = getWord(cardId);
+    if (!word) return renderEmpty("🔎", "抽检词卡暂时不可用", "返回后重新生成即可。", "home", "返回今日任务");
+    const options = weeklyCheckOptions(cardId, plannedIds, weekKey);
+    const clue = quizClueFor(word);
+    const visual = compactPictureMarkup(word, "checkup-picture", "checkup-emoji");
+    const completedBefore = feedback ? answered.size - 1 : answered.size;
+    return `<section class="view-page checkup-page"><div class="page-heading"><div><p class="eyebrow">WEEKLY INDEPENDENT CHECK</p><h1>这个意思对应哪个词？</h1><p>最多 5 题，只记第一次选择；本周题目避开今天的新词。</p></div><span class="date-stamp">${Math.max(1, completedBefore + 1)} / ${plannedIds.length}</span></div><article class="paper-card checkup-card"><div class="checkup-visual">${visual}</div><div class="checkup-copy">${clue ? `<p>${escapeHtml(clue)}</p>` : `<p>Look at the picture and choose the matching word.</p>`}<div class="checkup-options">${options.map((optionId) => {
+      const option = getWord(optionId);
+      const isSelected = feedback?.selectedCardId === optionId;
+      const isCorrect = feedback && optionId === cardId;
+      const className = feedback ? (isCorrect ? "is-correct" : isSelected ? "is-wrong" : "") : "";
+      return `<button class="checkup-option ${className}" type="button" data-action="weekly-answer" data-card-id="${escapeHtml(cardId)}" data-selected-id="${escapeHtml(optionId)}" ${feedback ? "disabled" : ""}>${escapeHtml(option?.word || "")}</button>`;
+    }).join("")}</div>${feedback ? `<div class="checkup-feedback ${feedback.correct ? "is-correct" : "is-wrong"}"><strong>${feedback.correct ? "✓ 独立认出" : `正确答案：${escapeHtml(word.word)}`}</strong><span>第一次选择已经记录，不需要反复点到正确。</span></div><button class="btn btn-primary" type="button" data-action="weekly-next">${answered.size >= plannedIds.length ? "查看本周结果 →" : "下一题 →"}</button>` : `<small>答案提交前不会显示反馈，也不会播放目标词读音。</small>`}</div></article></section>`;
+  }
+
+  function answerWeeklyCheck(cardId, selectedCardId) {
+    const weekKey = localWeekKey();
+    const plannedIds = weeklyCheckPlan();
+    const canonicalCardId = canonicalWordId(cardId);
+    const canonicalSelectedId = canonicalWordId(selectedCardId);
+    if (!plannedIds.includes(canonicalCardId) || !getWord(canonicalSelectedId)) return;
+    if (state.recognitionEvents.some((event) => event.weekKey === weekKey && event.cardId === canonicalCardId)) return;
+    const sequence = ++state.attemptSequence;
+    const correct = canonicalCardId === canonicalSelectedId;
+    state.recognitionEvents.push({
+      eventId: `recognition:${DEVICE_ID}:${sequence}`,
+      cardId: canonicalCardId,
+      selectedCardId: canonicalSelectedId,
+      senseId: `${canonicalCardId}:default`,
+      occurredAt: Date.now(),
+      weekKey,
+      correct,
+      firstAttempt: true,
+      sessionId: SESSION_ID,
+      deviceId: DEVICE_ID,
+      sequence,
+      appVersion: APP_VERSION
+    });
+    runtime.checkupFeedback = { cardId: canonicalCardId, selectedCardId: canonicalSelectedId, correct };
+    saveState();
+    render();
+  }
+
+  function advanceWeeklyCheck() {
+    runtime.checkupFeedback = null;
+    render();
+  }
+
   function renderParentReport() {
     const metrics = learningMetrics();
     const difficultRows = metrics.difficultWords.map((item) => {
@@ -3532,7 +3672,7 @@
       <div class="page-heading"><div><p class="eyebrow">PARENT LEARNING REPORT</p><h1>只看真实证据，不把“翻过卡片”当作掌握</h1><p>以下数据来自 Kevin 的独立首答、复习结果和长期排期；旧版本没有逐题日志的部分不会被凭空补齐。</p></div><span class="date-stamp">最近 30 天</span></div>
       <section class="parent-level-grid" aria-label="词汇能力分层">
         <article><span>01 · SEEN</span><strong>${metrics.seen}</strong><p>看过并进入学习记录</p></article>
-        <article class="is-unmeasured"><span>02 · RECOGNIZED</span><strong>—</strong><p>尚无独立选择题证据，不用拼写成绩冒充</p></article>
+        <article class="${metrics.recognitionMeasured ? "" : "is-unmeasured"}"><span>02 · RECOGNIZED</span><strong>${metricValue(metrics.recognized)}</strong><p>${metrics.recognitionMeasured ? "每周独立识词抽检答对" : "尚无独立选择题证据，不用拼写成绩冒充"}</p></article>
         <article><span>03 · RECALLED SPELLING</span><strong>${metrics.independentlySpelled}</strong><p>完整拼写首次独立答对</p></article>
         <article><span>04 · LONG-TERM</span><strong>${metrics.mature}</strong><p>进入 60 天以上仍继续抽检</p></article>
       </section>
@@ -3540,6 +3680,7 @@
         <section class="paper-card parent-summary-card"><div class="card-head"><div><h2>学习流量</h2><p>控制新词流入，优先守住旧记忆</p></div></div><div class="parent-number-grid"><div><strong>${metrics.new7}</strong><span>7 天新接触</span></div><div><strong>${metrics.new30}</strong><span>30 天新接触</span></div><div><strong>${metrics.backlog}</strong><span>安全延期积压</span></div><div><strong>${metrics.activeDays30}</strong><span>30 天活跃日</span></div></div></section>
         <section class="paper-card parent-summary-card"><div class="card-head"><div><h2>回忆质量</h2><p>只统计有逐题证据的记录</p></div></div><div class="parent-number-grid"><div><strong>${metricValue(metrics.firstAttemptRate, "%")}</strong><span>完整拼写首答正确率</span></div><div><strong>${metricValue(metrics.retentionRate, "%")}</strong><span>旧词独立保持率</span></div><div><strong>${metricValue(metrics.averageActiveMinutes)}</strong><span>活跃日可记录答题分钟</span></div><div><strong>${metrics.reviewAttemptCount}</strong><span>30 天独立复习首答</span></div></div></section>
       </div>
+      <section class="paper-card parent-checkup-card"><div><p class="eyebrow">3–5 MINUTES · ONCE A WEEK</p><h2>每周独立识词抽检</h2><p>随机抽取最多 5 个非当天新词，只记录第一次选择，不给金币压力。</p></div><button class="btn btn-primary" type="button" data-route="checkup">开始／继续本周抽检 →</button></section>
       <section class="paper-card parent-difficult-card"><div class="card-head"><div><h2>最近的困难词</h2><p>Again 权重高于 Hard；用于决定减量或多给一次回访，不用于惩罚。</p></div><button class="btn btn-small btn-soft" type="button" data-route="settings">调整每日新词上限</button></div>${difficultRows ? `<div class="parent-table-wrap"><table><thead><tr><th>单词</th><th>Again</th><th>Hard</th><th>下次回访</th></tr></thead><tbody>${difficultRows}</tbody></table></div>` : `<div class="book-empty">最近 30 天还没有可用的困难词逐题证据。</div>`}</section>
       <section class="parent-data-note"><strong>${metrics.hasEventEvidence ? "逐题证据已启用" : "当前主要是旧版汇总记录"}</strong><p>“可记录答题分钟”只包括有计时的拼写作答，不等于 Kevin 的完整学习时长；识词能力将在独立轻量测验上线后单独统计。</p></section>
     </section>`;
@@ -4582,6 +4723,8 @@
     else if (action === "cancel-custom-edit") cancelCustomEdit();
     else if (action === "archive-custom-word") archiveCustomWord(target.dataset.cardId);
     else if (action === "restore-custom-word") restoreCustomWord(target.dataset.cardId);
+    else if (action === "weekly-answer") answerWeeklyCheck(target.dataset.cardId, target.dataset.selectedId);
+    else if (action === "weekly-next") advanceWeeklyCheck();
     else if (action === "core-batch-prev") applyCoreBatch((state.settings.coreBatch || 1) - 1);
     else if (action === "core-batch-next") applyCoreBatch((state.settings.coreBatch || 1) + 1);
     else if (action === "save-core-batch") applyCoreBatch(document.getElementById("coreBatchInput")?.value, true);
@@ -4851,7 +4994,7 @@
   window.addEventListener("hashchange", () => {
     stopSpeech();
     const requested = window.location.hash.slice(1);
-    route = ["home", "learn", "practice", "review", "books", "notebook", "parent", "pk", "settings"].includes(requested) ? requested : "home";
+    route = ["home", "learn", "practice", "review", "books", "notebook", "parent", "checkup", "pk", "settings"].includes(requested) ? requested : "home";
     render();
   });
   window.addEventListener("storage", (event) => {
@@ -4880,6 +5023,7 @@
     lexemeIdForWord,
     lemmaIdForWord,
     sanitizeAttemptEvents,
+    sanitizeRecognitionEvents,
     sanitizeCustomWordDraft,
     sanitizeCustomWords,
     sanitizeSavedWords,
@@ -4932,6 +5076,9 @@
     buildDailyPlan,
     dailyPlanMetrics,
     learningMetrics,
+    localWeekKey,
+    weeklyCheckPlan,
+    weeklyCheckOptions,
     shouldIgnoreGlobalEnter,
     taskCountsAsCleanInitial,
     resetTaskForMasteryRetry,
@@ -4948,7 +5095,7 @@
   invalidateCustomCatalog();
   ensureToday();
   const requestedRoute = window.location.hash.slice(1);
-  route = ["home", "learn", "practice", "review", "books", "notebook", "parent", "pk", "settings"].includes(requestedRoute) ? requestedRoute : "home";
+  route = ["home", "learn", "practice", "review", "books", "notebook", "parent", "checkup", "pk", "settings"].includes(requestedRoute) ? requestedRoute : "home";
   if (!window.location.hash) window.history.replaceState(null, "", "#home");
   render();
 })();

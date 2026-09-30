@@ -23,7 +23,7 @@ const testWord = {
   spellingVariants: [],
   en: "a large road vehicle",
   zh: "卡车",
-  visual: {},
+  visual: { emoji: "🚚" },
   breakdown: []
 };
 
@@ -33,7 +33,7 @@ const coreWord = {
   acceptedAnswers: [],
   en: "the ability to remember",
   zh: "",
-  visual: {},
+  visual: { emoji: "🧠" },
   breakdown: { label: "SOUND CHUNKS", parts: [] },
   englishOnly: true
 };
@@ -452,6 +452,34 @@ assert.equal(metrics.firstAttemptRate, 67);
 assert.equal(metrics.retentionRate, 50);
 assert.equal(metrics.backlog, 1);
 assert.equal(metrics.difficultWords[0].word, "truck");
+
+const recognitionEvents = api.sanitizeRecognitionEvents([
+  { eventId: "recognition:device:1", cardId: "ket:test", selectedCardId: "ket:test", occurredAt: metricsNow, weekKey: "2026-09-28", correct: true, sessionId: "s", deviceId: "d", sequence: 1 },
+  { eventId: "recognition:device:2", cardId: "missing:test", selectedCardId: "ket:test", occurredAt: metricsNow, weekKey: "2026-09-28", correct: true }
+]);
+assert.equal(recognitionEvents.length, 1);
+assert.equal(recognitionEvents[0].firstAttempt, true);
+const recognitionMetrics = api.learningMetrics({
+  progress: { "ket:test": { learnedAt: metricsNow - 5 * 86_400_000 } },
+  lexemeProgress: {},
+  attemptEvents: [],
+  recognitionEvents,
+  today: { reviewBacklogIds: [] }
+}, metricsNow);
+assert.equal(recognitionMetrics.recognized, 1);
+assert.equal(recognitionMetrics.recognitionMeasured, true);
+
+assert.equal(api.localWeekKey(new Date(2026, 8, 30, 12)), "2026-09-28");
+const weeklyPlan = api.weeklyCheckPlan({
+  progress: {
+    "ket:test": { learnedAt: 10 },
+    "core2000:test": { learnedAt: 20 },
+    "core2000:truck": { learnedAt: 30 }
+  },
+  today: { newIds: ["core2000:test"] }
+}, new Date(2026, 8, 30, 12));
+assert.deepEqual(Array.from(weeklyPlan), ["ket:test"], "weekly check must exclude today's new cards and deduplicate the same spelling");
+assert.ok(api.weeklyCheckOptions("ket:test", weeklyPlan, "2026-09-28").includes("ket:test"));
 
 const baseBackup = {
   schemaVersion: 1,
