@@ -556,6 +556,14 @@ assert.deepEqual(Array.from(frozenPlan.today.plannedReviewIds), ["ket:test"]);
 assert.equal(frozenPlan.today.plannedReviewIds.includes("core2000:test"), false, "a later due card must not expand today's frozen plan");
 assert.deepEqual(Array.from(frozenPlan.today.reviewBacklogIds), ["core2000:test"]);
 
+const pausedPlan = api.mergeState({
+  ...baseBackup,
+  today: { ...baseBackup.today, pausedAt: 456789 }
+}, true);
+assert.equal(pausedPlan.today.pausedAt, 456789, "a voluntary rest must survive reload without completing or deleting today's plan");
+assert.equal(pausedPlan.today.completed, false);
+assert.equal(pausedPlan.today.goalAwarded, false);
+
 const sharedLexemeState = api.mergeState({
   ...baseBackup,
   progress: {

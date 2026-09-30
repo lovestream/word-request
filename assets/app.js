@@ -794,6 +794,7 @@
       reviewDoneIds: safeWordIds(rawToday.reviewDoneIds).filter((id) => Boolean(progress[id])),
       studyCursor: safeInteger(rawToday.studyCursor, 0, 0, 10_000),
       tasks,
+      pausedAt: rawToday.pausedAt == null ? null : finiteNumber(rawToday.pausedAt, null, 0, 9_999_999_999_999),
       goalAwarded: Boolean(rawToday.goalAwarded),
       completed: Boolean(rawToday.completed),
       sessionXp: safeInteger(rawToday.sessionXp, 0),
@@ -2744,12 +2745,34 @@
 
   function navigate(nextRoute) {
     if (!nextRoute) return;
+    if (state.today?.pausedAt && ["learn", "practice"].includes(nextRoute)) {
+      state.today.pausedAt = null;
+      saveState();
+    }
     if (nextRoute !== route) stopSpeech();
     if (window.location.hash !== `#${nextRoute}`) window.location.hash = nextRoute;
     else {
       route = nextRoute;
       render();
     }
+  }
+
+  function pauseToday() {
+    if (!state.today || state.today.completed || state.today.practiceMode === "sprint") return;
+    state.today.pausedAt = Date.now();
+    stopSpeech();
+    saveState();
+    navigate("home");
+    render();
+    toast("今天的进度已保存，休息不会受罚", "🌙");
+  }
+
+  function resumeToday() {
+    if (!state.today?.pausedAt) return;
+    state.today.pausedAt = null;
+    saveState();
+    const cta = homeCta();
+    navigate(cta.route || "home");
   }
 
   const SPRINT_PHASE_META = [
@@ -2811,6 +2834,7 @@
 
   function homeCta() {
     const day = state.today;
+    if (day.pausedAt) return { action: "resume-today", label: "继续今天的任务", icon: "↻" };
     const learned = day.learnedIds.length;
     if (day.practiceMode === "sprint") {
       const sprint = day.sprint;
@@ -2848,11 +2872,16 @@
 
   function renderDailyPlanSummary(day = state.today, english = false) {
     const plan = dailyPlanMetrics(day);
+    const selectedWords = (day?.newIds || []).filter((id) => Boolean(state.savedWords?.[id])).length;
+    const workTotal = plan.newWords + plan.plannedReviews;
+    const workDone = (day?.practicedIds || []).length + plan.reviewDone;
+    const completion = workTotal ? Math.min(100, Math.round(workDone / workTotal * 100)) : 100;
     return `<div class="review-summary daily-plan-summary" aria-label="${english ? "Frozen daily learning plan" : "今日冻结学习计划"}">
       <div class="review-stat-card"><strong>${plan.estimatedMinutes}</strong><span>${english ? "EST. MINUTES" : "预计分钟"}</span></div>
       <div class="review-stat-card"><strong>${plan.plannedReviews}</strong><span>${english ? "PLANNED REVIEWS" : "计划旧词"}</span></div>
       <div class="review-stat-card"><strong>${plan.newWords}</strong><span>${english ? "NEW WORDS" : "可学新词"}</span></div>
-      <div class="review-stat-card"><strong>${plan.backlog}</strong><span>${english ? "REVIEW BACKLOG" : "计划外积压"}</span></div>
+      <div class="review-stat-card"><strong>${selectedWords}</strong><span>${english ? "MY WORDS" : "自选词"}</span></div>
+      <div class="review-stat-card"><strong>${completion}%</strong><span>${english ? "COMPLETED" : "今日完成"}</span></div>
     </div>`;
   }
 
@@ -2868,15 +2897,8 @@
     const due = plan.reviewRemaining;
     const workTotal = total + plan.plannedReviews;
     const workDone = practiced + plan.reviewDone;
-    const progressPercent = workTotal ? Math.round((workDone / workTotal) * 100) : 100;
-    const circumference = 276.46;
-    const dashOffset = circumference * (1 - progressPercent / 100);
     const cta = homeCta();
-    const activeWords = Object.keys(state.lexemeProgress || state.progress).length;
-    const accuracy = state.stats.attempts ? Math.round((state.stats.correct / state.stats.attempts) * 100) : 100;
     const remaining = Math.max(0, total - learned);
-    const practiceTasks = day.tasks.filter((task) => task.source === "new");
-    const practiceDone = practiceTasks.filter((task) => task.status === "done").length;
 
     return `
       <section class="view-page home-page">
@@ -2892,11 +2914,12 @@
         <section class="home-hero" aria-labelledby="hero-title">
           <div class="hero-copy">
             <span class="hero-kicker">${escapeHtml(bank.icon)} 当前地图 · ${escapeHtml(bank.short)}</span>
-            <h2 class="hero-title" id="hero-title">${day.completed ? "今天的探险，漂亮收官！" : total ? `还差 <em>${remaining}</em> 个新发现` : due ? `今天先守住 <em>${due}</em> 个旧朋友` : "今天的合理计划已经清空"}</h2>
-            <p class="hero-subtitle">今日任务已经按 20 分钟左右冻结；积压不会偷偷加入，明天会继续平稳安排。</p>
+            <h2 class="hero-title" id="hero-title">${day.pausedAt ? "今天先休息，进度已经收好" : day.completed ? "今天的探险，漂亮收官！" : total ? `还差 <em>${remaining}</em> 个新发现` : due ? `今天先守住 <em>${due}</em> 个旧朋友` : "今天的合理计划已经清空"}</h2>
+            <p class="hero-subtitle">${day.pausedAt ? "不会扣连续天数，也不会清空未完成词；明天会把需要的内容平稳接回来。" : `今日任务已按约 20 分钟冻结；${plan.backlog ? `${plan.backlog} 个积压安全留到后续。` : "没有额外积压偷偷加入。"}`}</p>
             <div class="hero-actions">
-              <button class="btn btn-primary" type="button" data-route="${cta.route}"><span>${cta.icon}</span>${cta.label}</button>
+              <button class="btn btn-primary" type="button" ${cta.action ? `data-action="${cta.action}"` : `data-route="${cta.route}"`}><span>${cta.icon}</span>${cta.label}</button>
               <button class="btn btn-ghost" type="button" data-route="books">${escapeHtml(bank.name)} · 切换词库</button>
+              ${!day.completed && !day.pausedAt && (workDone > 0 || workTotal > 0) ? `<button class="btn btn-ghost" type="button" data-action="pause-today">今天先到这里</button>` : ""}
             </div>
           </div>
           <div class="hero-compass" aria-hidden="true">
@@ -2906,44 +2929,7 @@
         </section>
 
         ${renderDailyPlanSummary(day)}
-
-        <div class="home-grid">
-          <section class="paper-card mission-card">
-            <div class="card-head">
-              <div><h2>今日探险清单</h2><p>先复习，再按容量学习新词</p></div>
-              <span class="book-tag">${escapeHtml(bank.icon)} ${escapeHtml(bank.name)}</span>
-            </div>
-            <div class="mission-progress">
-              <div class="progress-ring" role="progressbar" aria-label="今日任务进度" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${progressPercent}">
-                <svg viewBox="0 0 100 100" aria-hidden="true">
-                  <circle class="ring-track" cx="50" cy="50" r="44"></circle>
-                  <circle class="ring-value" cx="50" cy="50" r="44" stroke-dasharray="${circumference}" stroke-dashoffset="${dashOffset}"></circle>
-                </svg>
-                <span class="ring-copy"><strong>${progressPercent}%</strong><small>完成度</small></span>
-              </div>
-              <div class="mission-steps">
-                ${missionStep("1", "曲线回访", due ? `${plan.reviewDone}/${plan.plannedReviews} 个完成` : "今日计划已清", due === 0)}
-                ${missionStep("2", "看图学习", total ? `${learned}/${total} 个单词` : "今日 0 新词", total === 0 || learned >= total)}
-                ${missionStep("3", "拼写闯关", total ? `${practiceDone}/${Math.max(practiceTasks.length, total)} 关` : "今日 0 新词", total === 0 || practiced >= total)}
-              </div>
-            </div>
-          </section>
-
-          <section class="paper-card memory-card">
-            <div class="card-head"><div><h2>记忆回访站</h2><p>按最佳时间回来，省力记得牢</p></div></div>
-            <div class="memory-count"><strong>${due}</strong><span>个旧词<br />还在今日计划</span></div>
-            <div class="curve-preview" aria-hidden="true">
-              ${REVIEW_DELAYS.slice(0, 5).map((delay, index) => `<span class="curve-dot ${index === 0 && due ? "is-active" : ""}">${index + 1}</span>`).join("")}
-            </div>
-            <button class="btn ${due ? "btn-coral" : "btn-soft"}" type="button" data-route="${due ? "practice" : "review"}">${due ? "完成今日旧词计划" : plan.backlog ? `另有 ${plan.backlog} 个积压，明天继续` : "看看记忆生长地图"}</button>
-          </section>
-        </div>
-
-        <div class="quick-stats" aria-label="学习统计">
-          <div class="quick-stat"><span class="quick-stat-icon">🧠</span><span><strong>${activeWords}</strong><small>记忆背包里的单词</small></span></div>
-          <div class="quick-stat"><span class="quick-stat-icon">🎯</span><span><strong>${accuracy}%</strong><small>累计拼写正确率</small></span></div>
-          <div class="quick-stat"><span class="quick-stat-icon">🏆</span><span><strong>${masteredCount()}</strong><small>进入长期低频复习</small></span></div>
-        </div>
+        <section class="home-detail-links"><button class="btn btn-soft" type="button" data-route="review">查看记忆阶段详情</button><button class="btn btn-soft" type="button" data-route="notebook">管理阅读生词</button><button class="btn btn-soft" type="button" data-route="parent">打开家长报告</button></section>
       </section>`;
   }
 
@@ -2961,7 +2947,9 @@
     const newComplete = total === 0 || practiced >= total;
     const workTotal = total + plan.plannedReviews;
     const progress = workTotal ? Math.round(((practiced + plan.reviewDone) / workTotal) * 100) : 100;
-    const action = plan.reviewRemaining
+    const action = day.pausedAt
+      ? { action: "resume-today", label: "Resume today's plan", icon: "↻" }
+      : plan.reviewRemaining
       ? { action: "start-review", label: `Review ${plan.reviewRemaining} planned word${plan.reviewRemaining === 1 ? "" : "s"}`, icon: "↻" }
       : learned < total
       ? { route: "learn", label: learned ? "Continue picture study" : "Start picture study", icon: "✦" }
@@ -2974,7 +2962,7 @@
       <section class="view-page home-page core-home" style="--core-book-color:${safeColor(batch?.bookColor, "#00a9cf")}">
         <div class="page-heading"><div><p class="eyebrow">2000 CORE ENGLISH WORDS</p><h1>Ready for Set ${batch?.sequence || 1}, Kevin?</h1><p>Today's frozen plan balances older memories with ${total} new word${total === 1 ? "" : "s"} from this ten-word set.</p></div><span class="date-stamp">BOOK ${batch?.book || 1} · UNIT ${batch?.unit || 1}</span></div>
         <section class="home-hero core-course-hero">
-          <div class="hero-copy"><span class="hero-kicker">BOOK ${batch?.book || 1} · UNIT ${batch?.unit || 1} · ${escapeHtml(batch?.setLabel || "Set A")}</span><h2 class="hero-title">${escapeHtml(batch?.theme || "Core English")}</h2><p class="hero-subtitle">Review comes first. The remaining words in this set stay safely queued for another day; the workbook page unlocks after all ten have been learned.</p><div class="hero-actions"><button class="btn btn-primary" type="button" ${action.action ? `data-action="${action.action}"` : `data-route="${action.route}"`}><span>${action.icon}</span>${action.label}</button><button class="btn btn-ghost" type="button" data-route="books">Choose another set</button></div></div>
+          <div class="hero-copy"><span class="hero-kicker">BOOK ${batch?.book || 1} · UNIT ${batch?.unit || 1} · ${escapeHtml(batch?.setLabel || "Set A")}</span><h2 class="hero-title">${day.pausedAt ? "Progress saved. Rest for today." : escapeHtml(batch?.theme || "Core English")}</h2><p class="hero-subtitle">${day.pausedAt ? "No streak penalty and no lost words. The unfinished cards stay safely queued." : "Review comes first. The remaining words in this set stay safely queued for another day; the workbook page unlocks after all ten have been learned."}</p><div class="hero-actions"><button class="btn btn-primary" type="button" ${action.action ? `data-action="${action.action}"` : `data-route="${action.route}"`}><span>${action.icon}</span>${action.label}</button><button class="btn btn-ghost" type="button" data-route="books">Choose another set</button>${!day.completed && !day.pausedAt ? `<button class="btn btn-ghost" type="button" data-action="pause-today">Stop for today</button>` : ""}</div></div>
           <div class="core-book-badge" aria-label="Book ${batch?.book || 1}, set ${batch?.sequence || 1}"><strong>${batch?.book || 1}</strong><span>BOOK</span><small>SET ${batch?.sequence || 1}/128</small></div>
         </section>
         ${renderDailyPlanSummary(day, true)}
@@ -4735,6 +4723,8 @@
     else if (action === "restore-custom-word") restoreCustomWord(target.dataset.cardId);
     else if (action === "weekly-answer") answerWeeklyCheck(target.dataset.cardId, target.dataset.selectedId);
     else if (action === "weekly-next") advanceWeeklyCheck();
+    else if (action === "pause-today") pauseToday();
+    else if (action === "resume-today") resumeToday();
     else if (action === "core-batch-prev") applyCoreBatch((state.settings.coreBatch || 1) - 1);
     else if (action === "core-batch-next") applyCoreBatch((state.settings.coreBatch || 1) + 1);
     else if (action === "save-core-batch") applyCoreBatch(document.getElementById("coreBatchInput")?.value, true);

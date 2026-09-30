@@ -2599,6 +2599,17 @@ button:disabled {
   margin-bottom: 22px;
 }
 
+.daily-plan-summary {
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+}
+
+.home-detail-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  justify-content: center;
+}
+
 .review-stat-card {
   padding: 17px;
   border: 1px solid var(--line);
@@ -4356,6 +4367,10 @@ button:disabled {
 
   .review-summary {
     grid-template-columns: 1fr 1fr;
+  }
+
+  .daily-plan-summary .review-stat-card:last-child {
+    grid-column: 1 / -1;
   }
 
   .memory-map {
