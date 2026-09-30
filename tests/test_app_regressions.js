@@ -538,6 +538,8 @@ assert.deepEqual(Array.from(api.savedTrainingIds(savedWordState)), ["ket:test"])
 const customDraft = api.sanitizeCustomWordDraft({
   word: "whispered",
   pos: "verb",
+  lemma: "whisper",
+  formType: "past tense",
   en: "spoke very quietly",
   example: "The dragon whispered a secret.",
   context: "Kevin found it in Dragon Masters.",
@@ -545,6 +547,10 @@ const customDraft = api.sanitizeCustomWordDraft({
   image: "javascript:alert(1)"
 });
 assert.equal(customDraft.word, "whispered");
+assert.equal(customDraft.lemma, "whisper");
+assert.equal(customDraft.formType, "past tense");
+assert.equal(api.lemmaIdForWord(customDraft), api.lemmaIdForWord({ word: "whisper", lemma: "whisper" }), "inflected forms should link to the same word family");
+assert.notEqual(api.lexemeIdForWord(customDraft), api.lexemeIdForWord({ word: "whisper" }), "the exact inflected spelling must keep its own spelling schedule");
 assert.equal(customDraft.visual.image, undefined, "custom picture input must reject unsafe URL schemes");
 assert.ok(customDraft.breakdown.parts.length > 1, "custom cards need safe visual spelling chunks for the shared study view");
 assert.equal(customDraft.breakdown.type, "spelling chunks");

@@ -2126,6 +2126,45 @@ button:disabled {
   font-weight: 900;
 }
 
+.word-family-tag {
+  padding: 3px 7px;
+  color: var(--forest);
+  border-radius: 999px;
+  background: rgba(255, 202, 75, 0.24);
+  font-size: 9px;
+  font-weight: 900;
+  letter-spacing: 0.04em;
+}
+
+.study-form-relation {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  align-items: center;
+  margin-top: 8px;
+  color: var(--ink-soft);
+  font-size: 11px;
+}
+
+.study-form-relation span {
+  padding: 3px 7px;
+  border-radius: 999px;
+  background: rgba(255, 202, 75, 0.24);
+  font-size: 9px;
+  font-weight: 900;
+  letter-spacing: 0.06em;
+}
+
+.study-form-relation strong {
+  color: var(--forest);
+}
+
+.custom-form-relation {
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: rgba(255, 202, 75, 0.16);
+}
+
 .notebook-word-copy h2 {
   margin: 8px 0 5px;
   color: var(--forest);

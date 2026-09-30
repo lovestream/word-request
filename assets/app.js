@@ -853,6 +853,9 @@
       ? (existingId || raw.id)
       : "";
     const pos = safeText(raw.pos, "", 40).trim();
+    const lemma = (safeText(raw.lemma, word, 80).trim().replace(/\s+/g, " ") || word).toLowerCase();
+    if (!/^[a-z][a-z' -]{0,78}$/i.test(lemma)) return null;
+    const formType = safeText(raw.formType, "", 60).trim();
     const context = safeText(raw.context, "", 320).trim().replace(/\s+/g, " ");
     const image = safeCustomImage(raw.image || raw.visual?.image);
     const spellingParts = word.split(/([ '-])/).filter(Boolean).flatMap((part) =>
@@ -864,6 +867,8 @@
       id,
       word,
       pos,
+      lemma,
+      formType,
       en,
       example,
       context,
@@ -1279,6 +1284,14 @@
     if (!surface) return "";
     const slug = surface.replace(/[^\p{L}\p{N}]+/gu, "-").replace(/^-|-$/g, "").slice(0, 48) || "word";
     return `lexeme-${slug}-${hashString(surface).toString(16).padStart(8, "0")}`;
+  }
+
+  function lemmaIdForWord(wordOrId) {
+    const word = typeof wordOrId === "string" ? getWord(wordOrId) : wordOrId;
+    const lemma = normalizeAnswer(word?.lemma || word?.word || "").normalize("NFKC");
+    if (!lemma) return "";
+    const slug = lemma.replace(/[^\p{L}\p{N}]+/gu, "-").replace(/^-|-$/g, "").slice(0, 48) || "word";
+    return `lemma-${slug}-${hashString(lemma).toString(16).padStart(8, "0")}`;
   }
 
   function lexemeMembers() {
@@ -2939,6 +2952,7 @@
               <div>
                 <button class="study-word word-trigger ${word.word.includes(" ") ? "is-phrase" : ""}" type="button" data-action="toggle-breakdown" aria-expanded="${runtime.breakdownOpen}">${escapeHtml(word.word)}</button>
                 <div class="ipa-row"><span>${escapeHtml(word.ipa || "/—/")}</span>${word.pos?.length ? `<span class="pos-pill">${escapeHtml(Array.isArray(word.pos) ? word.pos.join(" · ") : word.pos)}</span>` : ""}<small>· ${coreEnglish ? "American voice" : "美式语音"}</small></div>
+                ${word.custom && word.lemma && normalizeAnswer(word.lemma) !== normalizeAnswer(word.word) ? `<div class="study-form-relation"><span>WORD FAMILY</span><strong>${escapeHtml(word.word)} → ${escapeHtml(word.lemma)}</strong>${word.formType ? `<small>${escapeHtml(word.formType)}</small>` : ""}</div>` : ""}
               </div>
               <button class="sound-button is-sequence" type="button" data-action="speak-sequence" data-word="${escapeHtml(word.word)}" data-definition="${escapeHtml(studyDefinition)}" data-example="${escapeHtml(word.example || "")}" aria-label="${coreEnglish ? "Play the word, definition, and example" : "依次播放单词、英文释义和例句"}" title="${coreEnglish ? "Play word → definition → example" : "连读：单词 → 英文释义 → 例句"}"><span>▶</span><small>${coreEnglish ? "PLAY ALL" : "连读"}</small></button>
             </div>
@@ -3285,7 +3299,7 @@
     return `<article class="notebook-word-card" data-card-id="${escapeHtml(word.id)}">
       <div class="notebook-word-visual">${image}</div>
       <div class="notebook-word-copy">
-        <div class="notebook-word-title"><span class="book-tag">${escapeHtml(bank.icon)} ${escapeHtml(bank.short)}</span>${savedEntry ? `<span class="saved-word-source">${escapeHtml(sourceTag)}</span>` : ""}</div>
+        <div class="notebook-word-title"><span class="book-tag">${escapeHtml(bank.icon)} ${escapeHtml(bank.short)}</span>${savedEntry ? `<span class="saved-word-source">${escapeHtml(sourceTag)}</span>` : ""}${word.custom && word.lemma && normalizeAnswer(word.lemma) !== normalizeAnswer(word.word) ? `<span class="word-family-tag">FORM OF ${escapeHtml(word.lemma)}${word.formType ? ` · ${escapeHtml(word.formType)}` : ""}</span>` : ""}</div>
         <h2>${escapeHtml(word.word)}</h2>
         <p>${escapeHtml(studyDefinitionFor(word) || "Definition unavailable")}</p>
         ${word.example ? `<small>${escapeHtml(word.example)}</small>` : ""}
@@ -3311,6 +3325,8 @@
       <div class="custom-word-form">
         <label><span>Word / form *</span><input id="customWord" type="text" maxlength="80" value="${escapeHtml(customWordFormValue(editing, "word"))}" placeholder="whispered" /></label>
         <label><span>Part of speech</span><input id="customPos" type="text" maxlength="40" value="${escapeHtml(customWordFormValue(editing, "pos"))}" placeholder="verb" /></label>
+        <label><span>Base form / lemma</span><input id="customLemma" type="text" maxlength="80" value="${escapeHtml(customWordFormValue(editing, "lemma"))}" placeholder="whisper" /></label>
+        <label><span>Form note</span><input id="customFormType" type="text" maxlength="60" value="${escapeHtml(customWordFormValue(editing, "formType"))}" placeholder="past tense" /></label>
         <label class="custom-wide"><span>Child-friendly English definition *</span><textarea id="customDefinition" maxlength="320" rows="2" placeholder="spoke very quietly">${escapeHtml(customWordFormValue(editing, "en"))}</textarea></label>
         <label class="custom-wide"><span>Standard example sentence *</span><textarea id="customExample" maxlength="320" rows="2" placeholder="The dragon whispered a secret.">${escapeHtml(customWordFormValue(editing, "example"))}</textarea></label>
         <label class="custom-wide"><span>Reading context (optional)</span><textarea id="customContext" maxlength="320" rows="2" placeholder="What was happening when Kevin met this word?">${escapeHtml(customWordFormValue(editing, "context"))}</textarea></label>
@@ -3338,7 +3354,7 @@
       ? []
       : allWords()
         .filter((word) => {
-          const haystack = normalizeAnswer(`${word.word} ${studyDefinitionFor(word)} ${(word.pos || []).join?.(" ") || word.pos || ""}`);
+          const haystack = normalizeAnswer(`${word.word} ${word.lemma || ""} ${word.formType || ""} ${studyDefinitionFor(word)} ${(word.pos || []).join?.(" ") || word.pos || ""}`);
           return haystack.includes(query);
         })
         .sort((left, right) => {
@@ -4080,6 +4096,8 @@
     return sanitizeCustomWordDraft({
       word: document.getElementById("customWord")?.value,
       pos: document.getElementById("customPos")?.value,
+      lemma: document.getElementById("customLemma")?.value,
+      formType: document.getElementById("customFormType")?.value,
       en: document.getElementById("customDefinition")?.value,
       example: document.getElementById("customExample")?.value,
       context: document.getElementById("customContext")?.value,
@@ -4101,7 +4119,10 @@
       ...draft,
       train: Boolean(document.getElementById("customTrain")?.checked)
     };
-    showDialog(`<div class="dialog-content custom-word-preview">${image}<p class="eyebrow">PARENT PREVIEW</p><h2>${escapeHtml(draft.word)}</h2><p><strong>${escapeHtml(draft.pos || "word")}</strong> · ${escapeHtml(draft.en)}</p><blockquote>${escapeHtml(draft.example)}</blockquote>${draft.context ? `<p class="custom-context"><strong>Reading context:</strong> ${escapeHtml(draft.context)}</p>` : ""}<p><strong>Source:</strong> ${escapeHtml(draft.sourceTag)}</p><div class="dialog-actions"><button class="btn btn-soft" type="button" data-action="close-dialog">返回修改</button><button class="btn btn-primary" type="button" data-action="confirm-custom-word">家长确认并保存</button></div></div>`);
+    const formRelation = normalizeAnswer(draft.lemma) !== normalizeAnswer(draft.word)
+      ? `<p class="custom-form-relation"><strong>Word family:</strong> ${escapeHtml(draft.word)} → ${escapeHtml(draft.lemma)}${draft.formType ? ` · ${escapeHtml(draft.formType)}` : ""}<br /><small>The spelling schedule stays separate for this exact form.</small></p>`
+      : "";
+    showDialog(`<div class="dialog-content custom-word-preview">${image}<p class="eyebrow">PARENT PREVIEW</p><h2>${escapeHtml(draft.word)}</h2><p><strong>${escapeHtml(draft.pos || "word")}</strong> · ${escapeHtml(draft.en)}</p>${formRelation}<blockquote>${escapeHtml(draft.example)}</blockquote>${draft.context ? `<p class="custom-context"><strong>Reading context:</strong> ${escapeHtml(draft.context)}</p>` : ""}<p><strong>Source:</strong> ${escapeHtml(draft.sourceTag)}</p><div class="dialog-actions"><button class="btn btn-soft" type="button" data-action="close-dialog">返回修改</button><button class="btn btn-primary" type="button" data-action="confirm-custom-word">家长确认并保存</button></div></div>`);
   }
 
   function customWordId(draft) {
@@ -4760,6 +4781,7 @@
     spellingAnswersFor,
     canonicalWordId,
     lexemeIdForWord,
+    lemmaIdForWord,
     sanitizeAttemptEvents,
     sanitizeCustomWordDraft,
     sanitizeCustomWords,
