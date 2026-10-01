@@ -431,6 +431,50 @@ const laterAnswerVersion = api.recordCoreExerciseSubmission(genuineFirstAttempt,
 });
 assert.equal(laterAnswerVersion.firstAttemptAnswerKeyHash, "first-version", "later answer keys must not overwrite the first-attempt version");
 assert.equal(laterAnswerVersion.answerKeyHash, "later-version");
+const oldWorkbookAnswers = ["body"];
+const newWorkbookAnswers = ["bodies"];
+const oldWorkbookHash = api.coreAnswerKeyHash(oldWorkbookAnswers);
+const newWorkbookHash = api.coreAnswerKeyHash(newWorkbookAnswers);
+const oldCorrectWorkbook = api.recordCoreExerciseSubmission({ attempts: 0 }, {
+  at: 900,
+  responses: ["body"],
+  correctIndices: [0],
+  wrongIndices: [],
+  answerKeyHash: oldWorkbookHash,
+  completed: true
+});
+assert.deepEqual(
+  Array.from(api.reusableCoreExerciseCorrectIndices(oldCorrectWorkbook, newWorkbookHash)),
+  [],
+  "an answer locked under an older answer key must be unlocked when the key changes"
+);
+const regradedOldAnswer = api.gradeCoreExerciseResponses(oldCorrectWorkbook, ["body"], newWorkbookAnswers);
+assert.deepEqual(Array.from(regradedOldAnswer.correctIndices), []);
+assert.deepEqual(Array.from(regradedOldAnswer.wrongIndices), [0], "the old answer must be checked against the new key instead of bypassing validation");
+const failedRegradeRecord = api.recordCoreExerciseSubmission(oldCorrectWorkbook, {
+  at: 1000,
+  responses: ["body"],
+  correctIndices: regradedOldAnswer.correctIndices,
+  wrongIndices: regradedOldAnswer.wrongIndices,
+  answerKeyHash: regradedOldAnswer.answerKeyHash,
+  completed: false
+});
+assert.equal(failedRegradeRecord.completedAt, null);
+assert.deepEqual(Array.from(failedRegradeRecord.firstAttemptResponses), ["body"]);
+assert.equal(failedRegradeRecord.firstAttemptAnswerKeyHash, oldWorkbookHash);
+const correctedRegrade = api.gradeCoreExerciseResponses(failedRegradeRecord, ["bodies"], newWorkbookAnswers);
+const correctedWorkbookRecord = api.recordCoreExerciseSubmission(failedRegradeRecord, {
+  at: 1100,
+  responses: ["bodies"],
+  correctIndices: correctedRegrade.correctIndices,
+  wrongIndices: correctedRegrade.wrongIndices,
+  answerKeyHash: correctedRegrade.answerKeyHash,
+  completed: true
+});
+assert.deepEqual(Array.from(correctedWorkbookRecord.correctIndices), [0]);
+assert.equal(correctedWorkbookRecord.answerKeyHash, newWorkbookHash);
+assert.deepEqual(Array.from(correctedWorkbookRecord.firstAttemptResponses), ["body"], "regrading must not rewrite the historical first response");
+assert.equal(correctedWorkbookRecord.firstAttemptAnswerKeyHash, oldWorkbookHash, "regrading must keep the historical first answer-key version");
 assert.deepEqual(
   Array.from(api.filterDueIdsForBank(["ket:test", "core2000:test", "core2000:test"], "core2000")),
   ["core2000:test"],

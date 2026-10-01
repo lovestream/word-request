@@ -287,7 +287,11 @@
   }
 
   function coreExerciseIsComplete(day = state?.today) {
-    return Boolean(day?.coreExerciseId && coreExerciseRecord(day.coreExerciseId)?.completedAt);
+    if (!day?.coreExerciseId) return false;
+    const record = coreExerciseRecord(day.coreExerciseId);
+    if (!record?.completedAt) return false;
+    const currentHash = coreAnswerKeyHash(coreExerciseAnswers(day.coreExerciseId));
+    return !record.answerKeyHash || !currentHash || record.answerKeyHash === currentHash;
   }
 
   function coreExerciseAvailable(day = state?.today) {
@@ -3646,11 +3650,11 @@
     const currentAnswerKeyHash = coreAnswerKeyHash(answers);
     const answerKeyChanged = Boolean(record.answerKeyHash && record.answerKeyHash !== currentAnswerKeyHash);
     const responses = Array.from({ length: answerCount }, (_, index) => record.responses?.[index] || "");
-    const correctSet = new Set(record.correctIndices || []);
-    const wrongSet = new Set(record.wrongIndices || []);
+    const correctSet = new Set(reusableCoreExerciseCorrectIndices(record, currentAnswerKeyHash));
+    const wrongSet = answerKeyChanged ? new Set() : new Set(record.wrongIndices || []);
     const correctCount = correctSet.size;
     const ready = responses.every((value, index) => correctSet.has(index) || value.trim());
-    const feedback = record.attempts
+    const feedback = !answerKeyChanged && record.attempts
       ? wrongSet.size
         ? `<div class="core-exercise-feedback is-retry" role="status"><strong>${correctCount} correct · ${wrongSet.size} to fix</strong><span>The green answers are locked. Correct only the red boxes, then check again.</span></div>`
         : `<div class="core-exercise-feedback is-success" role="status"><strong>All ${answerCount} answers are correct!</strong><span>This set is complete and the next learning set is unlocked.</span></div>`
@@ -4581,6 +4585,23 @@
     };
   }
 
+  function reusableCoreExerciseCorrectIndices(record, answerKeyHash) {
+    if (!record?.answerKeyHash || !answerKeyHash || record.answerKeyHash !== answerKeyHash) return [];
+    return Array.isArray(record.correctIndices) ? [...record.correctIndices] : [];
+  }
+
+  function gradeCoreExerciseResponses(previous, responses, answers) {
+    const answerKeyHash = coreAnswerKeyHash(answers);
+    const previousCorrect = new Set(reusableCoreExerciseCorrectIndices(previous, answerKeyHash));
+    const correctIndices = [];
+    const wrongIndices = [];
+    for (let index = 0; index < answers.length; index += 1) {
+      if (previousCorrect.has(index) || coreExerciseAnswerMatches(responses[index], answers[index])) correctIndices.push(index);
+      else wrongIndices.push(index);
+    }
+    return { answerKeyHash, previousCorrect, correctIndices, wrongIndices };
+  }
+
   function completeCoreExercise() {
     if (!isCoreDay() || !state.today.coreExerciseId) return;
     const exerciseId = state.today.coreExerciseId;
@@ -4597,22 +4618,17 @@
       const input = inputs.find((candidate) => Number(candidate.dataset.index) === index);
       return safeText(input?.value ?? previous.responses?.[index], "", 120).trim();
     });
-    const previousCorrect = new Set(previous.correctIndices || []);
+    const grading = gradeCoreExerciseResponses(previous, responses, answers);
+    const previousCorrect = grading.previousCorrect;
     const firstBlankIndex = responses.findIndex((value, index) => !previousCorrect.has(index) && !value);
     if (firstBlankIndex >= 0) {
       toast("Complete every unlocked answer first.", "✎");
       inputs.find((input) => Number(input.dataset.index) === firstBlankIndex)?.focus();
       return;
     }
-    const correctIndices = [];
-    const wrongIndices = [];
-    for (let index = 0; index < answerCount; index += 1) {
-      if (previousCorrect.has(index) || coreExerciseAnswerMatches(responses[index], answers[index])) correctIndices.push(index);
-      else wrongIndices.push(index);
-    }
+    const { correctIndices, wrongIndices, answerKeyHash } = grading;
     const completed = wrongIndices.length === 0;
     const now = Date.now();
-    const answerKeyHash = coreAnswerKeyHash(answers);
     state.coreExercises[exerciseId] = recordCoreExerciseSubmission(previous, {
       responses,
       correctIndices,
@@ -5320,12 +5336,14 @@
         const record = coreExerciseRecord(exerciseId) || { responses: Array(answerCount).fill(""), correctIndices: [], wrongIndices: [], attempts: 0, completedAt: null };
         const inputIndex = Number(input.dataset.index);
         record.responses = Array.from({ length: answerCount }, (_, index) => index === inputIndex ? safeText(input.value, "", 120) : record.responses?.[index] || "");
-        record.correctIndices = record.correctIndices || [];
-        record.wrongIndices = (record.wrongIndices || []).filter((index) => index !== inputIndex);
+        const currentAnswerKeyHash = coreAnswerKeyHash(coreExerciseAnswers(exerciseId));
+        const answerKeyChanged = Boolean(record.answerKeyHash && record.answerKeyHash !== currentAnswerKeyHash);
+        record.correctIndices = answerKeyChanged ? [] : record.correctIndices || [];
+        record.wrongIndices = answerKeyChanged ? [] : (record.wrongIndices || []).filter((index) => index !== inputIndex);
         record.completedAt = null;
         state.coreExercises[exerciseId] = record;
         saveState();
-        const correctSet = new Set(record.correctIndices);
+        const correctSet = new Set(reusableCoreExerciseCorrectIndices(record, currentAnswerKeyHash));
         const ready = record.responses.every((value, index) => correctSet.has(index) || value.trim());
         const button = document.querySelector('[data-action="complete-core-exercise"]');
         if (button) button.disabled = !ready;
@@ -5569,6 +5587,8 @@
     coreExerciseAnswerMatches,
     coreAnswerKeyHash,
     recordCoreExerciseSubmission,
+    reusableCoreExerciseCorrectIndices,
+    gradeCoreExerciseResponses,
     coreExerciseEvidenceMetrics,
     coreExerciseAvailable,
     damerauDistanceOne,
