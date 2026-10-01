@@ -66,7 +66,7 @@
     { id: "first_word", emoji: "🥾", name: "迈出第一步", test: (s) => s.stats.learned >= 1 },
     { id: "ten_words", emoji: "🗺️", name: "十词地图", test: (s) => s.stats.learned >= 10 },
     { id: "combo_five", emoji: "⚡", name: "五连闪电", test: (s) => s.stats.bestCombo >= 5 },
-    { id: "streak_three", emoji: "🔥", name: "三日火苗", test: (s) => s.stats.streak >= 3 },
+    { id: "streak_three", emoji: "🔥", name: "三个学习日", test: (s) => s.stats.streak >= 3 },
     { id: "reviewer", emoji: "🌿", name: "曲线园丁", test: (s) => s.stats.reviewed >= 5 },
     { id: "master", emoji: "🏆", name: "记忆大师", test: (s) => masteredCount(s) >= 1 }
   ];
@@ -3090,7 +3090,7 @@
           <div class="hero-copy">
             <span class="hero-kicker">${escapeHtml(bank.icon)} 当前地图 · ${escapeHtml(bank.short)}</span>
             <h2 class="hero-title" id="hero-title">${day.pausedAt ? "今天先休息，进度已经收好" : day.completed ? "今天的探险，漂亮收官！" : total ? `还差 <em>${remaining}</em> 个新发现` : due ? `今天先守住 <em>${due}</em> 个旧朋友` : "今天的合理计划已经清空"}</h2>
-            <p class="hero-subtitle">${day.pausedAt ? "不会扣连续天数，也不会清空未完成词；明天会把需要的内容平稳接回来。" : `今日任务已按约 20 分钟冻结；${plan.backlog ? `${plan.backlog} 个积压安全留到后续。` : "没有额外积压偷偷加入。"}`}</p>
+            <p class="hero-subtitle">${day.pausedAt ? "休息不会被记作失败，累计学习日会保留；明天会把需要的内容平稳接回来。" : `今日任务已按约 20 分钟冻结；${plan.backlog ? `${plan.backlog} 个积压安全留到后续。` : "没有额外积压偷偷加入。"}`}</p>
             <div class="hero-actions">
               <button class="btn btn-primary" type="button" ${cta.action ? `data-action="${cta.action}"` : `data-route="${cta.route}"`}><span>${cta.icon}</span>${cta.label}</button>
               <button class="btn btn-ghost" type="button" data-route="books">${escapeHtml(bank.name)} · 切换词库</button>
@@ -3138,7 +3138,7 @@
       <section class="view-page home-page core-home" style="--core-book-color:${safeColor(batch?.bookColor, "#00a9cf")}">
         <div class="page-heading"><div><p class="eyebrow">2000 CORE ENGLISH WORDS</p><h1>Ready for Set ${batch?.sequence || 1}, Kevin?</h1><p>Today's frozen plan balances older memories with ${total} new word${total === 1 ? "" : "s"} from this ten-word set.</p></div><span class="date-stamp">BOOK ${batch?.book || 1} · UNIT ${batch?.unit || 1}</span></div>
         <section class="home-hero core-course-hero">
-          <div class="hero-copy"><span class="hero-kicker">BOOK ${batch?.book || 1} · UNIT ${batch?.unit || 1} · ${escapeHtml(batch?.setLabel || "Set A")}</span><h2 class="hero-title">${day.pausedAt ? "Progress saved. Rest for today." : escapeHtml(batch?.theme || "Core English")}</h2><p class="hero-subtitle">${day.pausedAt ? "No streak penalty and no lost words. The unfinished cards stay safely queued." : "Review comes first. The remaining words in this set stay safely queued for another day; the workbook page unlocks after all ten have been learned."}</p><div class="hero-actions"><button class="btn btn-primary" type="button" ${action.action ? `data-action="${action.action}"` : `data-route="${action.route}"`}><span>${action.icon}</span>${action.label}</button><button class="btn btn-ghost" type="button" data-route="books">Choose another set</button>${!day.completed && !day.pausedAt ? `<button class="btn btn-ghost" type="button" data-action="pause-today">Stop for today</button>` : ""}</div></div>
+          <div class="hero-copy"><span class="hero-kicker">BOOK ${batch?.book || 1} · UNIT ${batch?.unit || 1} · ${escapeHtml(batch?.setLabel || "Set A")}</span><h2 class="hero-title">${day.pausedAt ? "Progress saved. Rest for today." : escapeHtml(batch?.theme || "Core English")}</h2><p class="hero-subtitle">${day.pausedAt ? "Rest is not a failure. Your total learning days and unfinished cards stay safely saved." : "Review comes first. The remaining words in this set stay safely queued for another day; the workbook page unlocks after all ten have been learned."}</p><div class="hero-actions"><button class="btn btn-primary" type="button" ${action.action ? `data-action="${action.action}"` : `data-route="${action.route}"`}><span>${action.icon}</span>${action.label}</button><button class="btn btn-ghost" type="button" data-route="books">Choose another set</button>${!day.completed && !day.pausedAt ? `<button class="btn btn-ghost" type="button" data-action="pause-today">Stop for today</button>` : ""}</div></div>
           <div class="core-book-badge" aria-label="Book ${batch?.book || 1}, set ${batch?.sequence || 1}"><strong>${batch?.book || 1}</strong><span>BOOK</span><small>SET ${batch?.sequence || 1}/128</small></div>
         </section>
         ${renderDailyPlanSummary(day, true)}
@@ -4801,7 +4801,7 @@
   }
 
   function confirmReset() {
-    showDialog(`<div class="dialog-content"><div class="dialog-icon">🧹</div><h2>真的要清空学习记录吗？</h2><p>词库仍然保留，但 XP、金币、每日连续天数和每个单词的复习进度都会重新开始。这个操作不能撤销。</p><div class="dialog-actions"><button class="btn btn-soft" type="button" data-action="close-dialog">先不清空</button><button class="btn btn-coral" type="button" data-action="confirm-reset">确认清空</button></div></div>`);
+    showDialog(`<div class="dialog-content"><div class="dialog-icon">🧹</div><h2>真的要清空学习记录吗？</h2><p>词库仍然保留，但 XP、金币、累计学习日和每个单词的复习进度都会重新开始。这个操作不能撤销。</p><div class="dialog-actions"><button class="btn btn-soft" type="button" data-action="close-dialog">先不清空</button><button class="btn btn-coral" type="button" data-action="confirm-reset">确认清空</button></div></div>`);
   }
 
   function createPortableRecord(sourceState, exportedAt = Date.now()) {
