@@ -319,6 +319,9 @@ const migratedExercise = api.sanitizeCoreExercises({
 })["core2000-b1-u01-a-exercise"];
 assert.equal(migratedExercise.completedAt, null, "old ungraded workbook pages must not remain falsely complete");
 assert.equal(migratedExercise.correctIndices.length, 0);
+assert.equal(migratedExercise.evidenceQuality, "legacy-summary");
+assert.equal(migratedExercise.firstAttemptAt, null, "legacy final answers must not be fabricated into first-attempt evidence");
+assert.deepEqual(Array.from(migratedExercise.firstAttemptResponses), []);
 
 const checkedExercise = api.sanitizeCoreExercises({
   "core2000-b1-u01-a-exercise": {
@@ -331,6 +334,37 @@ const checkedExercise = api.sanitizeCoreExercises({
 })["core2000-b1-u01-a-exercise"];
 assert.equal(checkedExercise.completedAt, 123);
 assert.equal(checkedExercise.wrongIndices.length, 0);
+assert.equal(checkedExercise.evidenceQuality, "legacy-summary", "old completed pages remain valid but do not gain invented event evidence");
+const exerciseAnswers = windowStub.CORE2000_EXERCISE_ANSWERS["core2000-b1-u01-a-exercise"];
+const exerciseHash = api.coreAnswerKeyHash(exerciseAnswers);
+assert.equal(exerciseHash, api.coreAnswerKeyHash([...exerciseAnswers]), "the normalized answer key must have a stable version hash");
+const evidenceExercise = api.sanitizeCoreExercises({
+  "core2000-b1-u01-a-exercise": {
+    responses: exerciseAnswers,
+    correctIndices: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9],
+    wrongIndices: [],
+    attempts: 2,
+    completedAt: 500,
+    firstAttemptAt: 400,
+    firstAttemptResponses: ["a", "wrong", "d", "b", "c", "ease", "dentist", "finger", "body", "healthy"],
+    firstAttemptCorrectIndices: [0, 2, 3, 4, 5, 6, 7, 8, 9],
+    firstAttemptWrongIndices: [1],
+    submissions: [{ at: 400, responses: ["a", "wrong", "d", "b", "c", "ease", "dentist", "finger", "body", "healthy"], correctIndices: [0, 2, 3, 4, 5, 6, 7, 8, 9], wrongIndices: [1], answerKeyHash: exerciseHash }],
+    answerKeyHash: exerciseHash,
+    evidenceQuality: "event-log"
+  }
+})["core2000-b1-u01-a-exercise"];
+assert.equal(evidenceExercise.firstAttemptResponses[1], "wrong");
+assert.deepEqual(Array.from(evidenceExercise.firstAttemptWrongIndices), [1]);
+assert.equal(evidenceExercise.submissions.length, 1);
+assert.equal(evidenceExercise.answerKeyHash, exerciseHash);
+assert.deepEqual(JSON.parse(JSON.stringify(api.coreExerciseEvidenceMetrics({ coreExercises: { "core2000-b1-u01-a-exercise": evidenceExercise } }))), {
+  pages: 1,
+  answerCount: 10,
+  correctCount: 9,
+  firstAttemptRate: 90,
+  changedAnswerKeys: 0
+});
 assert.deepEqual(
   Array.from(api.filterDueIdsForBank(["ket:test", "core2000:test", "core2000:test"], "core2000")),
   ["core2000:test"],

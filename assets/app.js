@@ -261,6 +261,12 @@
     return Array.isArray(answers) ? answers : [];
   }
 
+  function coreAnswerKeyHash(answers) {
+    if (!Array.isArray(answers) || !answers.length) return "";
+    const normalized = answers.map((answer) => normalizeExerciseAnswer(answer));
+    return hashString(JSON.stringify(normalized)).toString(16).padStart(8, "0");
+  }
+
   function coreExerciseIsComplete(day = state?.today) {
     return Boolean(day?.coreExerciseId && coreExerciseRecord(day.coreExerciseId)?.completedAt);
   }
@@ -584,6 +590,22 @@
       const wrongIndices = [...new Set((Array.isArray(item.wrongIndices) ? item.wrongIndices : [])
         .map((index) => safeInteger(index, -1, -1, answerCount - 1))
         .filter((index) => index >= 0 && index < answerCount && !correctSet.has(index)))].sort((a, b) => a - b);
+      const sanitizeIndices = (values) => [...new Set((Array.isArray(values) ? values : [])
+        .map((index) => safeInteger(index, -1, -1, answerCount - 1))
+        .filter((index) => index >= 0 && index < answerCount))].sort((a, b) => a - b);
+      const hasFirstAttemptEvidence = item.evidenceQuality === "event-log" && item.firstAttemptAt != null && Array.isArray(item.firstAttemptResponses);
+      const submissions = (Array.isArray(item.submissions) ? item.submissions : []).slice(-20).map((submission) => {
+        if (!submission || typeof submission !== "object" || Array.isArray(submission)) return null;
+        const submissionCorrect = sanitizeIndices(submission.correctIndices);
+        const submissionCorrectSet = new Set(submissionCorrect);
+        return {
+          at: finiteNumber(submission.at, 0, 0, 9_999_999_999_999),
+          responses: Array.from({ length: answerCount }, (_, index) => safeText(submission.responses?.[index], "", 120)),
+          correctIndices: submissionCorrect,
+          wrongIndices: sanitizeIndices(submission.wrongIndices).filter((index) => !submissionCorrectSet.has(index)),
+          answerKeyHash: safeText(submission.answerKeyHash, "", 80)
+        };
+      }).filter(Boolean);
       result[id] = {
         responses: Array.from({ length: answerCount }, (_, index) => safeText(item.responses?.[index], "", 120)),
         correctIndices,
@@ -591,7 +613,14 @@
         attempts: safeInteger(item.attempts, 0, 0, 1000),
         completedAt: correctIndices.length === answerCount && item.completedAt != null
           ? finiteNumber(item.completedAt, null, 0, 9_999_999_999_999)
-          : null
+          : null,
+        firstAttemptAt: hasFirstAttemptEvidence ? finiteNumber(item.firstAttemptAt, null, 0, 9_999_999_999_999) : null,
+        firstAttemptResponses: hasFirstAttemptEvidence ? Array.from({ length: answerCount }, (_, index) => safeText(item.firstAttemptResponses?.[index], "", 120)) : [],
+        firstAttemptCorrectIndices: hasFirstAttemptEvidence ? sanitizeIndices(item.firstAttemptCorrectIndices) : [],
+        firstAttemptWrongIndices: hasFirstAttemptEvidence ? sanitizeIndices(item.firstAttemptWrongIndices) : [],
+        submissions: hasFirstAttemptEvidence ? submissions : [],
+        answerKeyHash: hasFirstAttemptEvidence ? safeText(item.answerKeyHash, "", 80) : "",
+        evidenceQuality: hasFirstAttemptEvidence ? "event-log" : "legacy-summary"
       };
     }
     return result;
@@ -1627,6 +1656,25 @@
       completedThisWeek: currentWeek.total > 0,
       uniqueCorrectEver: new Set(events.filter((event) => event.correct).map((event) => event.senseId || `${event.cardId}:default`)).size,
       testedUniqueEver: new Set(events.map((event) => event.senseId || `${event.cardId}:default`)).size
+    };
+  }
+
+  function coreExerciseEvidenceMetrics(source = state) {
+    const records = Object.entries(source?.coreExercises || {}).filter(([, record]) =>
+      record?.evidenceQuality === "event-log" && record.firstAttemptAt && Array.isArray(record.firstAttemptResponses)
+    );
+    const answerCount = records.reduce((sum, [, record]) => sum + record.firstAttemptResponses.length, 0);
+    const correctCount = records.reduce((sum, [, record]) => sum + (record.firstAttemptCorrectIndices || []).length, 0);
+    const changedAnswerKeys = records.filter(([exerciseId, record]) => {
+      const currentHash = coreAnswerKeyHash(coreExerciseAnswers(exerciseId));
+      return Boolean(record.answerKeyHash && currentHash && record.answerKeyHash !== currentHash);
+    }).length;
+    return {
+      pages: records.length,
+      answerCount,
+      correctCount,
+      firstAttemptRate: answerCount ? Math.round(correctCount / answerCount * 100) : null,
+      changedAnswerKeys
     };
   }
 
@@ -3470,6 +3518,8 @@
     if (!answers.length) return renderEmpty("▤", "Answer key unavailable", "This workbook page cannot be checked yet. Choose another set and try again.", "books", "Choose a set");
     const answerCount = answers.length;
     const record = coreExerciseRecord(exercise.id) || { responses: Array(answerCount).fill(""), correctIndices: [], wrongIndices: [], attempts: 0, completedAt: null };
+    const currentAnswerKeyHash = coreAnswerKeyHash(answers);
+    const answerKeyChanged = Boolean(record.answerKeyHash && record.answerKeyHash !== currentAnswerKeyHash);
     const responses = Array.from({ length: answerCount }, (_, index) => record.responses?.[index] || "");
     const correctSet = new Set(record.correctIndices || []);
     const wrongSet = new Set(record.wrongIndices || []);
@@ -3494,6 +3544,7 @@
               const label = `${index < 5 ? "A" : "B"}${index < 5 ? index + 1 : index - 4}`;
               return `<label class="${isCorrect ? "is-correct" : isWrong ? "is-error" : ""}"><span>${label}</span><input class="core-exercise-answer" data-index="${index}" type="text" autocomplete="off" spellcheck="false" value="${escapeHtml(value)}" placeholder="Your answer" ${isCorrect ? "disabled aria-label=\"Correct answer locked\"" : isWrong ? "aria-invalid=\"true\"" : ""} />${isCorrect ? "<em>✓ Locked</em>" : isWrong ? "<em>Try again</em>" : ""}</label>`;
             }).join("")}</div>
+            ${answerKeyChanged ? `<div class="core-exercise-feedback is-retry" role="status"><strong>Answer key updated</strong><span>Your earlier result is preserved. This check uses the current answer-key version.</span></div>` : ""}
             ${feedback}
             <p class="feature-note">Press Enter to move forward. Correct answers lock automatically after each check; only the red answers remain editable.</p>
             <button class="btn btn-primary" type="button" data-action="complete-core-exercise" ${ready ? "" : "disabled"}>Check answers →</button>
@@ -3830,6 +3881,7 @@
   function renderParentReport() {
     const metrics = learningMetrics();
     const recognition = recognitionMetrics();
+    const workbook = coreExerciseEvidenceMetrics();
     const qualityValue = (rate, count) => count < 10
       ? `<strong class="is-pending">样本还少</strong><span>先继续积累（${count}/10）</span>`
       : `<strong>${metricValue(rate, "%")}</strong><span>${count} 次首答</span>`;
@@ -3854,7 +3906,7 @@
         <article class="${recognition.completedThisWeek ? "" : "is-unmeasured"}"><span>WEEKLY RECOGNITION</span><strong>${recognition.completedThisWeek ? `${recognition.currentWeek.correct}/${recognition.currentWeek.total}` : "未抽检"}</strong><p>${recognition.averagePercent == null ? "近 4 周还没有独立抽检" : `近 4 周平均 ${recognition.averagePercent}%`}</p></article>
       </section>
       <section class="parent-summary-card"><div class="parent-section-heading"><div><p class="eyebrow">LEARNING LOAD</p><h2>本月学习负荷</h2></div><p>积压会安全延后，不算今天失败。</p></div><div class="parent-number-grid is-five"><div><strong>${metrics.new7}</strong><span>7 天新接触</span></div><div><strong>${metrics.new30}</strong><span>30 天新接触</span></div><div><strong>${metrics.backlog}</strong><span>backlog</span></div><div><strong>${metrics.activeDays30}</strong><span>活跃学习日</span></div><div><strong>${metricValue(metrics.averageActiveMinutes)}</strong><span>平均可记录拼写分钟</span></div></div><small class="parent-evidence-caption">可记录拼写分钟 ≠ 全部学习时长</small></section>
-      <section class="parent-summary-card"><div class="parent-section-heading"><div><p class="eyebrow">MEMORY QUALITY</p><h2>记忆质量</h2></div><p>只统计最近 30 天有逐题证据的首答。</p></div><div class="parent-number-grid"><div>${qualityValue(metrics.firstAttemptRate, metrics.firstAttemptCount)}<em>完整拼写首答正确率</em></div><div>${qualityValue(metrics.retentionRate, metrics.reviewAttemptCount)}<em>旧词独立保持率</em></div><div><strong>${metrics.reviewAttemptCount}</strong><span>review first attempts</span></div><div><strong>${metrics.againCount} / ${metrics.hardCount}</strong><span>Again / Hard</span></div></div></section>
+      <section class="parent-summary-card"><div class="parent-section-heading"><div><p class="eyebrow">MEMORY QUALITY</p><h2>记忆质量</h2></div><p>只统计最近 30 天有逐题证据的首答。</p></div><div class="parent-number-grid"><div>${qualityValue(metrics.firstAttemptRate, metrics.firstAttemptCount)}<em>完整拼写首答正确率</em></div><div>${qualityValue(metrics.retentionRate, metrics.reviewAttemptCount)}<em>旧词独立保持率</em></div><div><strong>${metrics.reviewAttemptCount}</strong><span>review first attempts</span></div><div><strong>${metrics.againCount} / ${metrics.hardCount}</strong><span>Again / Hard</span></div><div><strong>${metricValue(workbook.firstAttemptRate, "%")}</strong><span>原书练习首轮正确率 · ${workbook.pages} 页${workbook.changedAnswerKeys ? ` · ${workbook.changedAnswerKeys} 页答案表已更新` : ""}</span></div></div></section>
       <section class="parent-checkup-card"><div><p class="eyebrow">3–5 MINUTES · ONCE A WEEK</p><h2>每周独立识词抽检</h2><p>${recognition.completedThisWeek ? `本周已完成 ${recognition.currentWeek.correct}/${recognition.currentWeek.total}；` : "本周尚未完成；"}${recognition.averagePercent == null ? "近 4 周暂无结果。" : `近 4 周平均 ${recognition.averagePercent}%。`} 累计抽检中已独立认出 ${recognition.uniqueCorrectEver} 个不同词（不是总词汇量估计）。</p></div><button class="btn btn-primary" type="button" data-route="checkup">${recognition.completedThisWeek ? "查看本周抽检" : "开始本周抽检"} →</button></section>
       <section class="parent-difficult-card"><div class="parent-section-heading"><div><p class="eyebrow">RECENT FRICTION</p><h2>最近的困难词</h2></div><p>Again 权重高于 Hard，用于安排回访，不用于惩罚。</p></div>${difficultRows ? `<div class="parent-table-wrap"><table><thead><tr><th>Word</th><th>Again</th><th>Hard</th><th>Current stage</th><th>Next review</th></tr></thead><tbody>${difficultRows}</tbody></table></div>` : `<div class="book-empty">最近 30 天还没有可用的困难词逐题证据。</div>`}</section>
       <section class="parent-data-note"><strong>${metrics.hasEventEvidence ? "逐题证据已启用" : "当前主要是旧版汇总记录"}</strong><p>抽检结果只代表实际抽到的题；不会把它外推成 Kevin 的总词汇量。</p></section>
@@ -4385,12 +4437,29 @@
       else wrongIndices.push(index);
     }
     const completed = wrongIndices.length === 0;
+    const now = Date.now();
+    const answerKeyHash = coreAnswerKeyHash(answers);
+    const firstSubmission = !previous.firstAttemptAt;
+    const submissions = [...(previous.submissions || []), {
+      at: now,
+      responses: [...responses],
+      correctIndices: [...correctIndices],
+      wrongIndices: [...wrongIndices],
+      answerKeyHash
+    }].slice(-20);
     state.coreExercises[exerciseId] = {
       responses,
       correctIndices,
       wrongIndices,
       attempts: safeInteger(previous.attempts, 0, 0, 999) + 1,
-      completedAt: completed ? Date.now() : null
+      completedAt: completed ? now : null,
+      firstAttemptAt: firstSubmission ? now : previous.firstAttemptAt,
+      firstAttemptResponses: firstSubmission ? [...responses] : [...(previous.firstAttemptResponses || [])],
+      firstAttemptCorrectIndices: firstSubmission ? [...correctIndices] : [...(previous.firstAttemptCorrectIndices || [])],
+      firstAttemptWrongIndices: firstSubmission ? [...wrongIndices] : [...(previous.firstAttemptWrongIndices || [])],
+      submissions,
+      answerKeyHash,
+      evidenceQuality: "event-log"
     };
     if (!completed) {
       saveState();
@@ -5303,6 +5372,8 @@
     stateFromPortableRecord,
     normalizeExerciseAnswer,
     coreExerciseAnswerMatches,
+    coreAnswerKeyHash,
+    coreExerciseEvidenceMetrics,
     damerauDistanceOne,
     makeMask,
     canEnterPracticeAnswer,
