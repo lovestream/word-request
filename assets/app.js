@@ -1655,7 +1655,7 @@
     return localDateKey(monday);
   }
 
-  function recognitionMetrics(source = state, now = Date.now()) {
+  function recognitionMetrics(source = state, now = Date.now(), currentWeekPlanned = null) {
     const events = (source?.recognitionEvents || []).filter((event) => event && event.occurredAt <= now);
     const currentWeekKey = localWeekKey(new Date(now));
     const weekKeys = Array.from({ length: 4 }, (_, index) => localWeekKey(new Date(now - index * 7 * DAY_MS))).reverse();
@@ -1673,9 +1673,10 @@
     const measuredTotal = measuredWeeks.reduce((sum, week) => sum + week.total, 0);
     return {
       currentWeek,
+      currentWeekPlanned: currentWeekPlanned == null ? currentWeek.total : Math.max(currentWeek.total, safeInteger(currentWeekPlanned, 0, 0, 100)),
       last4Weeks,
       averagePercent: measuredTotal ? Math.round(measuredCorrect / measuredTotal * 100) : null,
-      completedThisWeek: currentWeek.total > 0,
+      completedThisWeek: currentWeek.total > 0 && (currentWeekPlanned == null || currentWeek.total >= currentWeekPlanned),
       uniqueCorrectEver: new Set(events.filter((event) => event.correct).map((event) => event.senseId || `${event.cardId}:default`)).size,
       testedUniqueEver: new Set(events.map((event) => event.senseId || `${event.cardId}:default`)).size
     };
@@ -3771,7 +3772,7 @@
       .map((word) => renderNotebookWordCard(word, state.savedWords[word.id]))
       .join("");
     const allSavedEntries = Object.values(state.savedWords || {});
-    const trainingCount = allSavedEntries.filter((entry) => entry.train && !state.progress[entry.cardId]?.learnedAt).length;
+    const trainingCount = allSavedEntries.filter((entry) => entry.train).length;
     const reviewingCount = allSavedEntries.filter((entry) => Boolean(spellingProgress(entry.cardId)?.dueAt)).length;
     const sourceNames = [...new Set(allSavedEntries.flatMap((entry) => (entry.sources || []).map((source) => source.sourceTag)))].sort();
     const archivedCustomWords = Object.values(state.customWords || {}).filter((word) => word.archived);
@@ -3779,7 +3780,7 @@
       <header class="notebook-header"><div><p class="eyebrow">MY WORDS</p><h1>阅读中遇到的词，都放在这里</h1><p>从 Mighty Robot、Dragon Masters 或其他阅读中收藏生词，再决定是否进入训练。</p></div><button class="btn btn-primary" type="button" data-action="open-add-word">＋ 添加阅读生词</button></header>
       <section class="notebook-summary" aria-label="生词本概览"><div><strong>${allSavedEntries.length}</strong><span>收藏总数</span></div><div><strong>${trainingCount}</strong><span>训练候选</span></div><div><strong>${reviewingCount}</strong><span>已进入复习</span></div><div><strong>${sourceNames.length}</strong><span>来源数</span></div></section>
       <section class="notebook-toolbar"><label class="search-box"><span aria-hidden="true">⌕</span><input id="notebookSearch" type="search" autocomplete="off" placeholder="搜索已收藏的词" value="${escapeHtml(runtime.notebookQuery)}" /></label><select id="notebookStatus" aria-label="状态筛选"><option value="all" ${runtime.notebookStatus === "all" ? "selected" : ""}>全部状态</option><option value="training" ${runtime.notebookStatus === "training" ? "selected" : ""}>训练中</option><option value="saved" ${runtime.notebookStatus === "saved" ? "selected" : ""}>只收藏</option><option value="custom" ${runtime.notebookStatus === "custom" ? "selected" : ""}>自建词</option></select><select id="notebookSourceFilter" aria-label="来源筛选"><option value="all">全部来源</option>${sourceNames.map((name) => `<option value="${escapeHtml(name)}" ${runtime.notebookSourceFilter === name ? "selected" : ""}>${escapeHtml(name)}</option>`).join("")}</select><select id="notebookSort" aria-label="排序"><option value="recent" ${runtime.notebookSort === "recent" ? "selected" : ""}>最近加入</option><option value="due" ${runtime.notebookSort === "due" ? "selected" : ""}>下次复习</option><option value="az" ${runtime.notebookSort === "az" ? "selected" : ""}>A–Z</option></select></section>
-      <section class="notebook-section"><div class="notebook-word-grid">${savedCards || `<div class="notebook-empty"><span>📖</span><h2>${allSavedEntries.length ? "没有符合筛选条件的词" : "阅读时遇到不会的词，就把它放进来。"}</h2><p>${allSavedEntries.length ? "换一个状态、来源或搜索词试试。" : "可以先收藏，之后再决定是否加入每天的训练。"}</p><button class="btn btn-primary" type="button" data-action="open-add-word">${allSavedEntries.length ? "清除筛选后再看" : "添加第一个阅读生词"}</button></div>`}</div></section>
+      <section class="notebook-section"><div class="notebook-word-grid">${savedCards || `<div class="notebook-empty"><span>📖</span><h2>${allSavedEntries.length ? "没有符合筛选条件的词" : "阅读时遇到不会的词，就把它放进来。"}</h2><p>${allSavedEntries.length ? "换一个状态、来源或搜索词试试。" : "可以先收藏，之后再决定是否加入每天的训练。"}</p><button class="btn btn-primary" type="button" data-action="${allSavedEntries.length ? "reset-notebook-filters" : "open-add-word"}">${allSavedEntries.length ? "清除筛选后再看" : "添加第一个阅读生词"}</button></div>`}</div></section>
       ${archivedCustomWords.length ? `<section class="notebook-section archived-word-section"><div class="card-head"><div><h2>已归档自建词</h2><p>历史仍保留，可随时恢复。</p></div></div>${archivedCustomWords.map(renderArchivedCustomWord).join("")}</section>` : ""}
     </section>`;
   }
@@ -3920,7 +3921,7 @@
 
   function renderParentReport() {
     const metrics = learningMetrics();
-    const recognition = recognitionMetrics();
+    const recognition = recognitionMetrics(state, Date.now(), weeklyCheckPlan().length);
     const workbook = coreExerciseEvidenceMetrics();
     const qualityValue = (rate, count) => count < 10
       ? `<strong class="is-pending">样本还少</strong><span>先继续积累（${count}/10）</span>`
@@ -3943,11 +3944,11 @@
         <article><span>SEEN</span><strong>${metrics.seen}</strong><p>已接触独立词形</p></article>
         <article><span>INDEPENDENT SPELLING</span><strong>${metrics.independentlySpelled}</strong><p>至少一次完整拼写首答独立正确</p></article>
         <article><span>LONG-TERM</span><strong>${metrics.mature}</strong><p>当前进入 mature 低频复习</p></article>
-        <article class="${recognition.completedThisWeek ? "" : "is-unmeasured"}"><span>WEEKLY RECOGNITION</span><strong>${recognition.completedThisWeek ? `${recognition.currentWeek.correct}/${recognition.currentWeek.total}` : "未抽检"}</strong><p>${recognition.averagePercent == null ? "近 4 周还没有独立抽检" : `近 4 周平均 ${recognition.averagePercent}%`}</p></article>
+        <article class="${recognition.completedThisWeek ? "" : "is-unmeasured"}"><span>WEEKLY RECOGNITION</span><strong>${recognition.currentWeek.total ? `${recognition.currentWeek.correct}/${recognition.currentWeekPlanned}` : "未抽检"}</strong><p>${recognition.averagePercent == null ? "近 4 周还没有独立抽检" : `近 4 周平均 ${recognition.averagePercent}%`}</p></article>
       </section>
       <section class="parent-summary-card"><div class="parent-section-heading"><div><p class="eyebrow">LEARNING LOAD</p><h2>本月学习负荷</h2></div><p>积压会安全延后，不算今天失败。</p></div><div class="parent-number-grid is-five"><div><strong>${metrics.new7}</strong><span>7 天新接触</span></div><div><strong>${metrics.new30}</strong><span>30 天新接触</span></div><div><strong>${metrics.backlog}</strong><span>backlog</span></div><div><strong>${metrics.activeDays30}</strong><span>活跃学习日</span></div><div><strong>${metricValue(metrics.averageActiveMinutes)}</strong><span>平均可记录拼写分钟</span></div></div><small class="parent-evidence-caption">可记录拼写分钟 ≠ 全部学习时长</small></section>
       <section class="parent-summary-card"><div class="parent-section-heading"><div><p class="eyebrow">MEMORY QUALITY</p><h2>记忆质量</h2></div><p>只统计最近 30 天有逐题证据的首答。</p></div><div class="parent-number-grid"><div>${qualityValue(metrics.firstAttemptRate, metrics.firstAttemptCount)}<em>完整拼写首答正确率</em></div><div>${qualityValue(metrics.retentionRate, metrics.reviewAttemptCount)}<em>旧词独立保持率</em></div><div><strong>${metrics.reviewAttemptCount}</strong><span>review first attempts</span></div><div><strong>${metrics.againCount} / ${metrics.hardCount}</strong><span>Again / Hard</span></div><div><strong>${metricValue(workbook.firstAttemptRate, "%")}</strong><span>原书练习首轮正确率 · ${workbook.pages} 页${workbook.changedAnswerKeys ? ` · ${workbook.changedAnswerKeys} 页答案表已更新` : ""}</span></div></div></section>
-      <section class="parent-checkup-card"><div><p class="eyebrow">3–5 MINUTES · ONCE A WEEK</p><h2>每周独立识词抽检</h2><p>${recognition.completedThisWeek ? `本周已完成 ${recognition.currentWeek.correct}/${recognition.currentWeek.total}；` : "本周尚未完成；"}${recognition.averagePercent == null ? "近 4 周暂无结果。" : `近 4 周平均 ${recognition.averagePercent}%。`} 累计抽检中已独立认出 ${recognition.uniqueCorrectEver} 个不同词（不是总词汇量估计）。</p></div><button class="btn btn-primary" type="button" data-route="checkup">${recognition.completedThisWeek ? "查看本周抽检" : "开始本周抽检"} →</button></section>
+      <section class="parent-checkup-card"><div><p class="eyebrow">3–5 MINUTES · ONCE A WEEK</p><h2>每周独立识词抽检</h2><p>${recognition.completedThisWeek ? `本周已完成 ${recognition.currentWeek.correct}/${recognition.currentWeekPlanned}；` : recognition.currentWeek.total ? `本周进行中 ${recognition.currentWeek.correct}/${recognition.currentWeekPlanned}；` : "本周尚未完成；"}${recognition.averagePercent == null ? "近 4 周暂无结果。" : `近 4 周平均 ${recognition.averagePercent}%。`} 累计抽检中已独立认出 ${recognition.uniqueCorrectEver} 个不同词（不是总词汇量估计）。</p></div><button class="btn btn-primary" type="button" data-route="checkup">${recognition.completedThisWeek ? "查看本周抽检" : "开始／继续本周抽检"} →</button></section>
       <section class="parent-difficult-card"><div class="parent-section-heading"><div><p class="eyebrow">RECENT FRICTION</p><h2>最近的困难词</h2></div><p>Again 权重高于 Hard，用于安排回访，不用于惩罚。</p></div>${difficultRows ? `<div class="parent-table-wrap"><table><thead><tr><th>Word</th><th>Again</th><th>Hard</th><th>Current stage</th><th>Next review</th></tr></thead><tbody>${difficultRows}</tbody></table></div>` : `<div class="book-empty">最近 30 天还没有可用的困难词逐题证据。</div>`}</section>
       <section class="parent-data-note"><strong>${metrics.hasEventEvidence ? "逐题证据已启用" : "当前主要是旧版汇总记录"}</strong><p>抽检结果只代表实际抽到的题；不会把它外推成 Kevin 的总词汇量。</p></section>
     </section>`;
@@ -5051,6 +5052,13 @@
     else if (action === "remove-saved-word") removeSavedWord(target.dataset.cardId);
     else if (action === "remove-saved-source") removeSavedWordSource(target.dataset.cardId, target.dataset.sourceIndex);
     else if (action === "open-add-word") showNotebookDialog("existing");
+    else if (action === "reset-notebook-filters") {
+      runtime.notebookQuery = "";
+      runtime.notebookStatus = "all";
+      runtime.notebookSourceFilter = "all";
+      runtime.notebookSort = "recent";
+      render();
+    }
     else if (action === "notebook-tab-existing") showNotebookDialog("existing");
     else if (action === "notebook-tab-custom") showNotebookDialog("custom");
     else if (action === "run-notebook-search") {

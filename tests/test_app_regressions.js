@@ -573,6 +573,9 @@ assert.equal(checkupMetrics.averagePercent, 67, "four-week average must use actu
 assert.equal(checkupMetrics.uniqueCorrectEver, 2);
 assert.equal(checkupMetrics.testedUniqueEver, 3);
 assert.equal(checkupMetrics.completedThisWeek, true);
+const partialCheckupMetrics = api.recognitionMetrics({ recognitionEvents }, metricsNow, 5);
+assert.equal(partialCheckupMetrics.currentWeekPlanned, 5);
+assert.equal(partialCheckupMetrics.completedThisWeek, false, "one answered checkup item must not be reported as a completed five-item week");
 
 assert.equal(api.localWeekKey(new Date(2026, 8, 30, 12)), "2026-09-28");
 const weeklyPlan = api.weeklyCheckPlan({

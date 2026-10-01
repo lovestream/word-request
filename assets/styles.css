@@ -4633,7 +4633,7 @@ button:disabled {
     font-weight: 900;
   }
 
-  .mobile-nav-item span {
+  .mobile-nav-item > span:first-child {
     display: grid;
     width: 30px;
     height: 30px;
@@ -4646,9 +4646,16 @@ button:disabled {
     color: var(--forest);
   }
 
-  .mobile-nav-item.is-active span {
+  .mobile-nav-item.is-active > span:first-child {
     color: var(--paper);
     background: var(--forest);
+  }
+
+  .mobile-nav-item > span:last-child {
+    display: block;
+    width: auto;
+    height: auto;
+    white-space: nowrap;
   }
 
   .mobile-action span {
