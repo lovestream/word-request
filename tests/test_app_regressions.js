@@ -641,9 +641,28 @@ const savedWordState = api.mergeState({
   today: null
 }, true);
 assert.deepEqual(JSON.parse(JSON.stringify(savedWordState.savedWords)), {
-  "ket:test": { cardId: "ket:test", sourceTag: "Dragon Masters", train: true, addedAt: 123 }
+  "ket:test": {
+    cardId: "ket:test",
+    train: true,
+    addedAt: 123,
+    sources: [{ sourceTag: "Dragon Masters", context: "", addedAt: 123 }]
+  }
 });
 assert.deepEqual(Array.from(api.savedTrainingIds(savedWordState)), ["ket:test"]);
+const multiSourceSavedWords = api.sanitizeSavedWords({
+  "ket:test": {
+    cardId: "ket:test",
+    train: true,
+    addedAt: 100,
+    sources: [
+      { sourceTag: "Dragon Masters", context: "The cave was dark.", addedAt: 101 },
+      { sourceTag: "dragon masters", context: "the cave was dark.", addedAt: 102 },
+      { sourceTag: "Mighty Robot", context: "A robot whispered.", addedAt: 103 }
+    ]
+  }
+});
+assert.equal(multiSourceSavedWords["ket:test"].sources.length, 2, "source + normalized context must deduplicate repeated reading encounters");
+assert.equal(multiSourceSavedWords["ket:test"].sources[1].sourceTag, "Mighty Robot");
 
 const customDraft = api.sanitizeCustomWordDraft({
   word: "whispered",

@@ -94,6 +94,11 @@
     bookQuery: "",
     notebookQuery: "",
     notebookSource: "Reading",
+    notebookContext: "",
+    notebookStatus: "all",
+    notebookSourceFilter: "all",
+    notebookSort: "recent",
+    notebookDialogTab: "existing",
     editingCustomId: null,
     pendingCustomDraft: null,
     checkupFeedback: null,
@@ -920,11 +925,30 @@
       if (!item || typeof item !== "object" || Array.isArray(item)) continue;
       const cardId = canonicalWordId(safeText(item.cardId || rawId, "", 220));
       if (!getWord(cardId)) continue;
+      const legacyAddedAt = finiteNumber(item.addedAt, Date.now(), 0, 9_999_999_999_999);
+      const sourceRows = Array.isArray(item.sources) && item.sources.length
+        ? item.sources
+        : [{ sourceTag: item.sourceTag, context: item.context, addedAt: legacyAddedAt }];
+      const sources = [];
+      const sourceKeys = new Set();
+      for (const source of sourceRows) {
+        if (!source || typeof source !== "object" || Array.isArray(source)) continue;
+        const sourceTag = safeText(source.sourceTag, "Reading", 80).trim() || "Reading";
+        const context = safeText(source.context, "", 320).trim();
+        const key = `${normalizeAnswer(sourceTag)}\n${normalizeAnswer(context)}`;
+        if (sourceKeys.has(key)) continue;
+        sourceKeys.add(key);
+        sources.push({
+          sourceTag,
+          context,
+          addedAt: finiteNumber(source.addedAt, legacyAddedAt, 0, 9_999_999_999_999)
+        });
+      }
       result[cardId] = {
         cardId,
-        sourceTag: safeText(item.sourceTag, "Reading", 80) || "Reading",
         train: Boolean(item.train),
-        addedAt: finiteNumber(item.addedAt, Date.now(), 0, 9_999_999_999_999)
+        addedAt: legacyAddedAt,
+        sources: sources.length ? sources : [{ sourceTag: "Reading", context: "", addedAt: legacyAddedAt }]
       };
     }
     return result;
@@ -3535,23 +3559,36 @@
       </section>`;
   }
 
-  function renderNotebookWordCard(word, savedEntry = null) {
+  function renderNotebookWordCard(word, savedEntry = null, inCatalog = false) {
     const bankKey = bankKeyForWordId(word.id);
     const bank = BANK_META[bankKey] || { short: word.custom ? "MY WORD" : bankKey.toUpperCase(), icon: "📖" };
     const image = word.visual?.image
       ? `<img src="${escapeHtml(word.visual.image)}" alt="Picture for ${escapeHtml(word.word)}" loading="lazy" />`
       : `<span class="notebook-word-emoji" aria-hidden="true">${escapeHtml(word.visual?.emoji || bank.icon || "📖")}</span>`;
-    const sourceTag = savedEntry?.sourceTag || runtime.notebookSource || "Reading";
+    const sources = savedEntry?.sources || [];
+    const spelling = spellingProgress(word.id);
+    const cardProgress = state.progress[word.id];
+    const status = spelling?.status === "mature"
+      ? { key: "mature", label: "Mature" }
+      : cardProgress?.learnedAt
+        ? { key: "reviewing", label: "Reviewing" }
+        : savedEntry?.train
+          ? { key: "waiting", label: "等待学习" }
+          : { key: "saved", label: "只收藏" };
+    const nextReview = spelling?.dueAt ? relativeDue(spelling.dueAt) : "";
+    const sourceChips = sources.map((source, index) => `<span class="saved-word-source">${escapeHtml(source.sourceTag)}${source.context ? ` · ${escapeHtml(source.context)}` : ""}<button type="button" data-action="remove-saved-source" data-card-id="${escapeHtml(word.id)}" data-source-index="${index}" aria-label="移除来源 ${escapeHtml(source.sourceTag)}">×</button></span>`).join("");
     return `<article class="notebook-word-card" data-card-id="${escapeHtml(word.id)}">
       <div class="notebook-word-visual">${image}</div>
       <div class="notebook-word-copy">
-        <div class="notebook-word-title"><span class="book-tag">${escapeHtml(bank.icon)} ${escapeHtml(bank.short)}</span>${savedEntry ? `<span class="saved-word-source">${escapeHtml(sourceTag)}</span>` : ""}${word.custom && word.lemma && normalizeAnswer(word.lemma) !== normalizeAnswer(word.word) ? `<span class="word-family-tag">FORM OF ${escapeHtml(word.lemma)}${word.formType ? ` · ${escapeHtml(word.formType)}` : ""}</span>` : ""}</div>
-        <h2>${escapeHtml(word.word)}</h2>
+        <div class="notebook-word-title"><span class="book-tag">${escapeHtml(bank.icon)} ${escapeHtml(bank.short)}</span>${word.custom && word.lemma && normalizeAnswer(word.lemma) !== normalizeAnswer(word.word) ? `<span class="word-family-tag">FORM OF ${escapeHtml(word.lemma)}${word.formType ? ` · ${escapeHtml(word.formType)}` : ""}</span>` : ""}</div>
+        <h2>${escapeHtml(word.word)}${word.pos?.length ? `<small>${escapeHtml(Array.isArray(word.pos) ? word.pos.join(" · ") : word.pos)}</small>` : ""}</h2>
         <p>${escapeHtml(studyDefinitionFor(word) || "Definition unavailable")}</p>
-        ${word.example ? `<small>${escapeHtml(word.example)}</small>` : ""}
+        ${savedEntry ? `<div class="saved-word-sources">${sourceChips}</div><div class="saved-word-meta"><span class="word-status is-${status.key}">${status.label}</span>${nextReview ? `<span>下次复习 ${escapeHtml(nextReview)}</span>` : ""}</div>` : ""}
       </div>
       <div class="notebook-word-actions">
-        ${savedEntry
+        ${inCatalog
+          ? `<button class="btn btn-small btn-primary" type="button" data-action="save-word" data-card-id="${escapeHtml(word.id)}" data-train="true">${savedEntry ? "添加这个阅读来源" : "收藏并加入训练候选"}</button><button class="btn btn-small btn-soft" type="button" data-action="save-word" data-card-id="${escapeHtml(word.id)}" data-train="false">只收藏</button>`
+          : savedEntry
           ? `<button class="btn btn-small ${savedEntry.train ? "btn-coral" : "btn-soft"}" type="button" data-action="toggle-saved-training" data-card-id="${escapeHtml(word.id)}">${savedEntry.train ? "✓ 加入训练候选" : "只收藏 · 点此加入训练"}</button>${word.custom ? `<button class="btn btn-small btn-soft" type="button" data-action="edit-custom-word" data-card-id="${escapeHtml(word.id)}">纠正内容</button><button class="btn btn-small btn-ghost" type="button" data-action="archive-custom-word" data-card-id="${escapeHtml(word.id)}">归档</button>` : `<button class="btn btn-small btn-ghost" type="button" data-action="remove-saved-word" data-card-id="${escapeHtml(word.id)}">移除</button>`}`
           : `<button class="btn btn-small btn-primary" type="button" data-action="save-word" data-card-id="${escapeHtml(word.id)}" data-train="true">收藏并候选训练</button><button class="btn btn-small btn-soft" type="button" data-action="save-word" data-card-id="${escapeHtml(word.id)}" data-train="false">只收藏</button>`}
       </div>
@@ -3565,9 +3602,11 @@
   }
 
   function renderCustomWordForm() {
-    const editing = runtime.editingCustomId ? getWord(runtime.editingCustomId) : null;
-    return `<section class="paper-card custom-word-panel">
-      <div class="card-head"><div><p class="eyebrow">PARENT-CHECKED CUSTOM CARD</p><h2>${editing ? `纠正 ${escapeHtml(editing.word)}` : "词库里没有？由家长新建"}</h2><p>只录入 Kevin 真实遇到的词。保存前会先预览，不会自动抓书或生成未经核实的释义。</p></div>${editing ? `<span class="book-tag">EDITING</span>` : `<span class="book-tag">NEW CARD</span>`}</div>
+    const existing = runtime.editingCustomId ? getWord(runtime.editingCustomId) : null;
+    const editing = existing || runtime.pendingCustomDraft;
+    const isEditing = Boolean(existing);
+    return `<section class="custom-word-panel">
+      <div class="card-head"><div><p class="eyebrow">PARENT-CHECKED CUSTOM CARD</p><h2>${isEditing ? `纠正 ${escapeHtml(editing.word)}` : "词库里没有？由家长新建"}</h2><p>只录入 Kevin 真实遇到的词。保存前会先预览，不会自动抓书或生成未经核实的释义。</p></div>${isEditing ? `<span class="book-tag">EDITING</span>` : `<span class="book-tag">NEW CARD</span>`}</div>
       <div class="custom-word-form">
         <label><span>Word / form *</span><input id="customWord" type="text" maxlength="80" value="${escapeHtml(customWordFormValue(editing, "word"))}" placeholder="whispered" /></label>
         <label><span>Part of speech</span><input id="customPos" type="text" maxlength="40" value="${escapeHtml(customWordFormValue(editing, "pos"))}" placeholder="verb" /></label>
@@ -3579,7 +3618,7 @@
         <label><span>Source *</span><input id="customSource" type="text" maxlength="80" value="${escapeHtml(customWordFormValue(editing, "sourceTag") || runtime.notebookSource)}" placeholder="Dragon Masters" /></label>
         <label><span>Picture URL (optional)</span><input id="customImage" type="url" maxlength="500" value="${escapeHtml(customWordFormValue(editing, "image"))}" placeholder="https://…" /></label>
       </div>
-      <div class="custom-word-controls"><label class="custom-train-choice"><input id="customTrain" type="checkbox" ${editing ? (state.savedWords[editing.id]?.train ? "checked" : "") : "checked"} /><span>加入后续训练候选（不会临时增加今天任务）</span></label><div class="notebook-word-actions">${editing ? `<button class="btn btn-small btn-ghost" type="button" data-action="cancel-custom-edit">取消修改</button>` : ""}<button class="btn btn-primary" type="button" data-action="preview-custom-word">先预览，再由家长确认 →</button></div></div>
+      <div class="custom-word-controls"><label class="custom-train-choice"><input id="customTrain" type="checkbox" ${isEditing ? (state.savedWords[editing.id]?.train ? "checked" : "") : editing?.train === false ? "" : "checked"} /><span>加入后续训练候选（不会临时增加今天任务）</span></label><div class="notebook-word-actions">${isEditing ? `<button class="btn btn-small btn-ghost" type="button" data-action="cancel-custom-edit">取消修改</button>` : ""}<button class="btn btn-primary" type="button" data-action="preview-custom-word">先预览，再由家长确认 →</button></div></div>
     </section>`;
   }
 
@@ -3590,39 +3629,36 @@
   function renderNotebook() {
     const query = normalizeAnswer(runtime.notebookQuery).trim();
     const savedEntries = Object.values(state.savedWords || {})
-      .sort((left, right) => right.addedAt - left.addedAt || left.cardId.localeCompare(right.cardId));
+      .filter((entry) => {
+        const word = getWord(entry.cardId);
+        if (!word) return false;
+        if (query && !normalizeAnswer(`${word.word} ${studyDefinitionFor(word)}`).includes(query)) return false;
+        if (runtime.notebookSourceFilter !== "all" && !(entry.sources || []).some((source) => source.sourceTag === runtime.notebookSourceFilter)) return false;
+        if (runtime.notebookStatus === "training" && !entry.train) return false;
+        if (runtime.notebookStatus === "saved" && entry.train) return false;
+        if (runtime.notebookStatus === "custom" && !word.custom) return false;
+        return true;
+      })
+      .sort((left, right) => {
+        if (runtime.notebookSort === "az") return getWord(left.cardId).word.localeCompare(getWord(right.cardId).word);
+        if (runtime.notebookSort === "due") return (spellingProgress(left.cardId)?.dueAt || Number.MAX_SAFE_INTEGER) - (spellingProgress(right.cardId)?.dueAt || Number.MAX_SAFE_INTEGER);
+        return right.addedAt - left.addedAt || left.cardId.localeCompare(right.cardId);
+      });
     const savedCards = savedEntries
       .map((entry) => getWord(entry.cardId))
       .filter(Boolean)
       .map((word) => renderNotebookWordCard(word, state.savedWords[word.id]))
       .join("");
-    const searchResults = query.length < 2
-      ? []
-      : allWords()
-        .filter((word) => {
-          const haystack = normalizeAnswer(`${word.word} ${word.lemma || ""} ${word.formType || ""} ${studyDefinitionFor(word)} ${(word.pos || []).join?.(" ") || word.pos || ""}`);
-          return haystack.includes(query);
-        })
-        .sort((left, right) => {
-          const leftExact = normalizeAnswer(left.word) === query ? 0 : 1;
-          const rightExact = normalizeAnswer(right.word) === query ? 0 : 1;
-          return leftExact - rightExact || left.word.localeCompare(right.word) || left.id.localeCompare(right.id);
-        })
-        .slice(0, 24);
-    const resultCards = searchResults
-      .map((word) => renderNotebookWordCard(word, state.savedWords[word.id], true))
-      .join("");
-    const trainingCount = savedEntries.filter((entry) => entry.train).length;
+    const allSavedEntries = Object.values(state.savedWords || {});
+    const trainingCount = allSavedEntries.filter((entry) => entry.train && !state.progress[entry.cardId]?.learnedAt).length;
+    const reviewingCount = allSavedEntries.filter((entry) => Boolean(spellingProgress(entry.cardId)?.dueAt)).length;
+    const sourceNames = [...new Set(allSavedEntries.flatMap((entry) => (entry.sources || []).map((source) => source.sourceTag)))].sort();
     const archivedCustomWords = Object.values(state.customWords || {}).filter((word) => word.archived);
     return `<section class="view-page notebook-page">
-      <div class="page-heading"><div><p class="eyebrow">READING WORD NOTEBOOK</p><h1>把阅读里遇见的词，放进 Kevin 的地图</h1><p>先搜索四个完整词库；收藏原卡不会复制进度，同一拼写继续共用一份记忆计划。</p></div><span class="date-stamp">${savedEntries.length} SAVED · ${trainingCount} TRAINING</span></div>
-      <section class="paper-card notebook-search-panel">
-        <div class="notebook-search-row"><label class="search-box"><span aria-hidden="true">⌕</span><input id="notebookSearch" type="search" autocomplete="off" placeholder="输入单词或英文释义，例如 accident" value="${escapeHtml(runtime.notebookQuery)}" /></label><label class="notebook-source-field"><span>来源</span><input id="notebookSource" type="text" maxlength="80" value="${escapeHtml(runtime.notebookSource)}" placeholder="Dragon Masters / EF / Reading" /></label></div>
-        <p class="feature-note">“收藏并候选训练”每次最多优先安排 3 个，并占用同一个每日新词额度；今天的冻结计划不会被临时加量。</p>
-      </section>
-      ${query.length >= 2 ? `<section class="notebook-section"><div class="card-head"><div><h2>搜索结果</h2><p>${searchResults.length ? `找到 ${searchResults.length} 张匹配词义卡` : "没有匹配的现有词条"}</p></div></div><div class="notebook-word-grid">${resultCards || `<div class="book-empty">没有现成词条，可以在下方由家长新建并预览。</div>`}</div></section>` : ""}
-      ${renderCustomWordForm()}
-      <section class="notebook-section"><div class="card-head"><div><h2>我的阅读生词</h2><p>每张来源卡独立保留词义，同拼写共享拼写复习。</p></div><span class="book-tag">${trainingCount} 个等待训练</span></div><div class="notebook-word-grid">${savedCards || `<div class="book-empty">还没有收藏。先在上方搜索 Kevin 阅读时遇到的词吧。</div>`}</div></section>
+      <header class="notebook-header"><div><p class="eyebrow">MY WORDS</p><h1>阅读中遇到的词，都放在这里</h1><p>从 Mighty Robot、Dragon Masters 或其他阅读中收藏生词，再决定是否进入训练。</p></div><button class="btn btn-primary" type="button" data-action="open-add-word">＋ 添加阅读生词</button></header>
+      <section class="notebook-summary" aria-label="生词本概览"><div><strong>${allSavedEntries.length}</strong><span>收藏总数</span></div><div><strong>${trainingCount}</strong><span>训练候选</span></div><div><strong>${reviewingCount}</strong><span>已进入复习</span></div><div><strong>${sourceNames.length}</strong><span>来源数</span></div></section>
+      <section class="notebook-toolbar"><label class="search-box"><span aria-hidden="true">⌕</span><input id="notebookSearch" type="search" autocomplete="off" placeholder="搜索已收藏的词" value="${escapeHtml(runtime.notebookQuery)}" /></label><select id="notebookStatus" aria-label="状态筛选"><option value="all" ${runtime.notebookStatus === "all" ? "selected" : ""}>全部状态</option><option value="training" ${runtime.notebookStatus === "training" ? "selected" : ""}>训练中</option><option value="saved" ${runtime.notebookStatus === "saved" ? "selected" : ""}>只收藏</option><option value="custom" ${runtime.notebookStatus === "custom" ? "selected" : ""}>自建词</option></select><select id="notebookSourceFilter" aria-label="来源筛选"><option value="all">全部来源</option>${sourceNames.map((name) => `<option value="${escapeHtml(name)}" ${runtime.notebookSourceFilter === name ? "selected" : ""}>${escapeHtml(name)}</option>`).join("")}</select><select id="notebookSort" aria-label="排序"><option value="recent" ${runtime.notebookSort === "recent" ? "selected" : ""}>最近加入</option><option value="due" ${runtime.notebookSort === "due" ? "selected" : ""}>下次复习</option><option value="az" ${runtime.notebookSort === "az" ? "selected" : ""}>A–Z</option></select></section>
+      <section class="notebook-section"><div class="notebook-word-grid">${savedCards || `<div class="notebook-empty"><span>📖</span><h2>${allSavedEntries.length ? "没有符合筛选条件的词" : "阅读时遇到不会的词，就把它放进来。"}</h2><p>${allSavedEntries.length ? "换一个状态、来源或搜索词试试。" : "可以先收藏，之后再决定是否加入每天的训练。"}</p><button class="btn btn-primary" type="button" data-action="open-add-word">${allSavedEntries.length ? "清除筛选后再看" : "添加第一个阅读生词"}</button></div>`}</div></section>
       ${archivedCustomWords.length ? `<section class="notebook-section archived-word-section"><div class="card-head"><div><h2>已归档自建词</h2><p>历史仍保留，可随时恢复。</p></div></div>${archivedCustomWords.map(renderArchivedCustomWord).join("")}</section>` : ""}
     </section>`;
   }
@@ -4400,13 +4436,24 @@
     const word = getWord(cardId);
     if (!word) return;
     const sourceTag = safeText(runtime.notebookSource, "Reading", 80).trim() || "Reading";
+    const existing = state.savedWords[word.id];
+    const now = Date.now();
+    const nextSource = {
+      sourceTag,
+      context: safeText(runtime.notebookContext, "", 320).trim(),
+      addedAt: now
+    };
+    const sources = [...(existing?.sources || [])];
+    const sourceKey = `${normalizeAnswer(nextSource.sourceTag)}\n${normalizeAnswer(nextSource.context)}`;
+    if (!sources.some((source) => `${normalizeAnswer(source.sourceTag)}\n${normalizeAnswer(source.context)}` === sourceKey)) sources.push(nextSource);
     state.savedWords[word.id] = {
       cardId: word.id,
-      sourceTag,
-      train: Boolean(train),
-      addedAt: state.savedWords[word.id]?.addedAt || Date.now()
+      train: Boolean(existing?.train || train),
+      addedAt: existing?.addedAt || now,
+      sources
     };
     saveState();
+    closeDialog();
     render();
     toast(train ? `${word.word} 已加入后续训练候选` : `${word.word} 已收藏`, train ? "✦" : "♡");
   }
@@ -4428,6 +4475,42 @@
     saveState();
     render();
     toast(`${word?.word || "这个词"} 已移出阅读生词本；学习记录仍然保留`, "✓");
+  }
+
+  function removeSavedWordSource(cardId, sourceIndex) {
+    const id = canonicalWordId(cardId);
+    const entry = state.savedWords[id];
+    const index = safeInteger(sourceIndex, -1, -1, (entry?.sources?.length || 0) - 1);
+    if (!entry || index < 0) return;
+    entry.sources.splice(index, 1);
+    if (!entry.sources.length) delete state.savedWords[id];
+    saveState();
+    render();
+    toast("阅读来源已移除；学习进度和答题记录仍然保留", "✓");
+  }
+
+  function notebookCatalogResults(query = runtime.notebookQuery) {
+    const normalized = normalizeAnswer(query).trim();
+    if (normalized.length < 2) return [];
+    return allWords()
+      .filter((word) => {
+        const haystack = normalizeAnswer(`${word.word} ${word.lemma || ""} ${word.formType || ""} ${studyDefinitionFor(word)} ${(word.pos || []).join?.(" ") || word.pos || ""}`);
+        return haystack.includes(normalized) && !word.archived;
+      })
+      .sort((left, right) => {
+        const leftExact = normalizeAnswer(left.word) === normalized ? 0 : 1;
+        const rightExact = normalizeAnswer(right.word) === normalized ? 0 : 1;
+        return leftExact - rightExact || left.word.localeCompare(right.word) || left.id.localeCompare(right.id);
+      })
+      .slice(0, 12);
+  }
+
+  function showNotebookDialog(tab = runtime.notebookDialogTab) {
+    runtime.notebookDialogTab = tab === "custom" ? "custom" : "existing";
+    const results = notebookCatalogResults();
+    const existingPanel = `<div class="notebook-dialog-search"><label class="search-box"><span aria-hidden="true">⌕</span><input id="notebookCatalogSearch" type="search" autocomplete="off" placeholder="输入 whisper 或英文释义" value="${escapeHtml(runtime.notebookQuery)}" /></label><button class="btn btn-soft" type="button" data-action="run-notebook-search">搜索</button></div><div class="notebook-dialog-source"><label><span>来源</span><input id="notebookSource" type="text" maxlength="80" value="${escapeHtml(runtime.notebookSource)}" placeholder="Dragon Masters" /></label><label><span>阅读语境（可选）</span><input id="notebookContext" type="text" maxlength="320" value="${escapeHtml(runtime.notebookContext)}" placeholder="Kevin 在哪句话里遇到它？" /></label></div><div class="notebook-dialog-results">${results.length ? results.map((word) => renderNotebookWordCard(word, state.savedWords[word.id], true)).join("") : `<div class="notebook-empty compact"><span>⌕</span><p>${runtime.notebookQuery.trim().length >= 2 ? "没有找到现有词条，可以切换到“新建词”。" : "输入至少两个字母开始搜索现有词库。"}</p></div>`}</div>`;
+    showDialog(`<div class="dialog-content notebook-dialog"><div class="dialog-title-row"><div><p class="eyebrow">ADD TO MY WORDS</p><h2>添加阅读生词</h2></div><button class="dialog-close" type="button" data-action="close-dialog" aria-label="关闭">×</button></div><div class="notebook-tabs" role="tablist"><button type="button" role="tab" data-action="notebook-tab-existing" aria-selected="${runtime.notebookDialogTab === "existing"}">从已有词库搜索</button><button type="button" role="tab" data-action="notebook-tab-custom" aria-selected="${runtime.notebookDialogTab === "custom"}">新建词</button></div>${runtime.notebookDialogTab === "existing" ? existingPanel : renderCustomWordForm()}</div>`);
+    window.setTimeout(() => document.getElementById(runtime.notebookDialogTab === "existing" ? "notebookCatalogSearch" : "customWord")?.focus(), 20);
   }
 
   function readCustomWordDraft() {
@@ -4460,7 +4543,7 @@
     const formRelation = normalizeAnswer(draft.lemma) !== normalizeAnswer(draft.word)
       ? `<p class="custom-form-relation"><strong>Word family:</strong> ${escapeHtml(draft.word)} → ${escapeHtml(draft.lemma)}${draft.formType ? ` · ${escapeHtml(draft.formType)}` : ""}<br /><small>The spelling schedule stays separate for this exact form.</small></p>`
       : "";
-    showDialog(`<div class="dialog-content custom-word-preview">${image}<p class="eyebrow">PARENT PREVIEW</p><h2>${escapeHtml(draft.word)}</h2><p><strong>${escapeHtml(draft.pos || "word")}</strong> · ${escapeHtml(draft.en)}</p>${formRelation}<blockquote>${escapeHtml(draft.example)}</blockquote>${draft.context ? `<p class="custom-context"><strong>Reading context:</strong> ${escapeHtml(draft.context)}</p>` : ""}<p><strong>Source:</strong> ${escapeHtml(draft.sourceTag)}</p><div class="dialog-actions"><button class="btn btn-soft" type="button" data-action="close-dialog">返回修改</button><button class="btn btn-primary" type="button" data-action="confirm-custom-word">家长确认并保存</button></div></div>`);
+    showDialog(`<div class="dialog-content custom-word-preview">${image}<p class="eyebrow">PARENT PREVIEW</p><h2>${escapeHtml(draft.word)}</h2><p><strong>${escapeHtml(draft.pos || "word")}</strong> · ${escapeHtml(draft.en)}</p>${formRelation}<blockquote>${escapeHtml(draft.example)}</blockquote>${draft.context ? `<p class="custom-context"><strong>Reading context:</strong> ${escapeHtml(draft.context)}</p>` : ""}<p><strong>Source:</strong> ${escapeHtml(draft.sourceTag)}</p><div class="dialog-actions"><button class="btn btn-soft" type="button" data-action="custom-back-edit">返回修改</button><button class="btn btn-primary" type="button" data-action="confirm-custom-word">家长确认并保存</button></div></div>`);
   }
 
   function customWordId(draft) {
@@ -4496,9 +4579,9 @@
     state.customWords[id] = updated;
     state.savedWords[id] = {
       cardId: id,
-      sourceTag: updated.sourceTag,
       train: Boolean(draft.train),
-      addedAt: state.savedWords[id]?.addedAt || now
+      addedAt: state.savedWords[id]?.addedAt || now,
+      sources: [{ sourceTag: updated.sourceTag, context: updated.context || "", addedAt: state.savedWords[id]?.addedAt || now }]
     };
     invalidateCustomCatalog();
     runtime.editingCustomId = null;
@@ -4514,13 +4597,13 @@
     if (!word || word.archived) return;
     runtime.editingCustomId = word.id;
     runtime.notebookSource = word.sourceTag;
-    render();
-    document.getElementById("customWord")?.focus();
+    showNotebookDialog("custom");
   }
 
   function cancelCustomEdit() {
     runtime.editingCustomId = null;
     runtime.pendingCustomDraft = null;
+    closeDialog();
     render();
   }
 
@@ -4544,7 +4627,7 @@
     if (!word) return;
     word.archived = false;
     word.updatedAt = Date.now();
-    state.savedWords[id] = { cardId: id, sourceTag: word.sourceTag, train: false, addedAt: Date.now() };
+    state.savedWords[id] = { cardId: id, train: false, addedAt: Date.now(), sources: [{ sourceTag: word.sourceTag, context: word.context || "", addedAt: Date.now() }] };
     invalidateCustomCatalog();
     saveState();
     render();
@@ -4818,7 +4901,20 @@
     else if (action === "save-word") saveWordToNotebook(target.dataset.cardId, target.dataset.train === "true");
     else if (action === "toggle-saved-training") toggleSavedWordTraining(target.dataset.cardId);
     else if (action === "remove-saved-word") removeSavedWord(target.dataset.cardId);
+    else if (action === "remove-saved-source") removeSavedWordSource(target.dataset.cardId, target.dataset.sourceIndex);
+    else if (action === "open-add-word") showNotebookDialog("existing");
+    else if (action === "notebook-tab-existing") showNotebookDialog("existing");
+    else if (action === "notebook-tab-custom") showNotebookDialog("custom");
+    else if (action === "run-notebook-search") {
+      runtime.notebookQuery = document.getElementById("notebookCatalogSearch")?.value || "";
+      runtime.notebookSource = document.getElementById("notebookSource")?.value || "Reading";
+      runtime.notebookContext = document.getElementById("notebookContext")?.value || "";
+      showNotebookDialog("existing");
+    }
     else if (action === "preview-custom-word") previewCustomWord();
+    else if (action === "custom-back-edit") {
+      showNotebookDialog("custom");
+    }
     else if (action === "confirm-custom-word") confirmCustomWord();
     else if (action === "edit-custom-word") editCustomWord(target.dataset.cardId);
     else if (action === "cancel-custom-edit") cancelCustomEdit();
@@ -4902,7 +4998,21 @@
         search?.setSelectionRange(search.value.length, search.value.length);
       }, 120);
     }
+    if (input.id === "notebookCatalogSearch") runtime.notebookQuery = input.value;
     if (input.id === "notebookSource") runtime.notebookSource = safeText(input.value, "Reading", 80);
+    if (input.id === "notebookContext") runtime.notebookContext = safeText(input.value, "", 320);
+    if (input.id === "notebookStatus") {
+      runtime.notebookStatus = ["all", "training", "saved", "custom"].includes(input.value) ? input.value : "all";
+      render();
+    }
+    if (input.id === "notebookSourceFilter") {
+      runtime.notebookSourceFilter = safeText(input.value, "all", 80);
+      render();
+    }
+    if (input.id === "notebookSort") {
+      runtime.notebookSort = ["recent", "due", "az"].includes(input.value) ? input.value : "recent";
+      render();
+    }
     if (input.classList.contains("core-exercise-answer")) {
       const exerciseId = state.today?.coreExerciseId;
       if (exerciseId) {
