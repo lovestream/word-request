@@ -45,6 +45,14 @@ const coreTruck = {
   en: "a large vehicle used to carry goods"
 };
 
+const temporaryPetWord = {
+  ...coreWord,
+  id: "pet:temporary-history",
+  word: "journey",
+  en: "an act of travelling from one place to another",
+  englishOnly: false
+};
+
 const windowStub = {
   __WORD_QUEST_TEST_ONLY__: true,
   CORE2000_COURSE: {
@@ -752,6 +760,11 @@ assert.equal(merged.today.tasks[0].id, "review:ket:test:4:full");
 assert.equal(merged.today.planVersion, 1);
 assert.deepEqual(Array.from(merged.today.plannedReviewIds), ["ket:test"]);
 assert.deepEqual(JSON.parse(JSON.stringify(merged.recognitionPlans)), {}, "legacy V1/V2 records must migrate safely without recognition plans");
+assert.deepEqual(JSON.parse(JSON.stringify(merged.unresolvedData)), {
+  savedWords: {},
+  recognitionEvents: [],
+  recognitionPlans: {}
+}, "legacy V1/V2 records must migrate safely without unresolved catalog data");
 
 const frozenPlan = api.mergeState({
   ...baseBackup,
@@ -1001,6 +1014,86 @@ const rehydrated = api.mergeState({
 }, true);
 assert.equal(rehydrated.progress["ket:test"].status, "reviewing", "a restored word bank must recover quarantined progress");
 assert.equal(Object.keys(rehydrated.orphanProgress).length, 0);
+
+windowStub.WORD_BANKS.pet = [temporaryPetWord];
+api.invalidateWordCatalogCaches();
+const petHistoryState = api.mergeState({
+  ...baseBackup,
+  progress: {
+    [temporaryPetWord.id]: {
+      status: "reviewing",
+      learnedAt: 10,
+      step: 2,
+      scheduleToken: 3,
+      dueAt: Date.now() + 1000
+    }
+  },
+  savedWords: {
+    [temporaryPetWord.id]: {
+      cardId: temporaryPetWord.id,
+      train: true,
+      addedAt: 20,
+      sources: [{ sourceTag: "PET Reader", context: "A long journey began.", addedAt: 21 }]
+    }
+  },
+  recognitionEvents: [{
+    eventId: "recognition:pet-device:1",
+    cardId: temporaryPetWord.id,
+    selectedCardId: temporaryPetWord.id,
+    occurredAt: 30,
+    weekKey: "2026-09-28",
+    correct: true,
+    sessionId: "pet-session",
+    deviceId: "pet-device",
+    sequence: 1
+  }],
+  recognitionPlans: {
+    "2026-09-28": {
+      weekKey: "2026-09-28",
+      cardIds: [temporaryPetWord.id],
+      startedAt: 25
+    }
+  },
+  today: null
+}, true);
+assert.ok(petHistoryState.progress[temporaryPetWord.id]);
+assert.ok(petHistoryState.savedWords[temporaryPetWord.id]);
+assert.equal(petHistoryState.recognitionEvents.length, 1);
+assert.deepEqual(Array.from(petHistoryState.recognitionPlans["2026-09-28"].cardIds), [temporaryPetWord.id]);
+
+delete windowStub.WORD_BANKS.pet;
+api.invalidateWordCatalogCaches();
+const degradedPetState = api.mergeState(petHistoryState, true);
+assert.ok(degradedPetState.orphanProgress[temporaryPetWord.id], "missing-bank progress must stay quarantined");
+assert.equal(degradedPetState.savedWords[temporaryPetWord.id], undefined);
+assert.equal(degradedPetState.recognitionEvents.length, 0);
+assert.equal(degradedPetState.recognitionPlans["2026-09-28"], undefined);
+assert.ok(degradedPetState.unresolvedData.savedWords[temporaryPetWord.id], "missing-bank My Words data must stay quarantined");
+assert.equal(degradedPetState.unresolvedData.recognitionEvents.length, 1, "missing-bank recognition history must stay quarantined");
+assert.deepEqual(
+  Array.from(degradedPetState.unresolvedData.recognitionPlans["2026-09-28"].cardIds),
+  [temporaryPetWord.id],
+  "a frozen weekly plan must stay intact while its bank is unavailable"
+);
+assert.deepEqual(
+  Array.from(api.weeklyCheckPlan(degradedPetState, new Date(2026, 9, 2, 12))),
+  [],
+  "an unresolved frozen plan must not participate in the current UI or be silently replaced"
+);
+
+const savedWhilePetMissing = JSON.parse(JSON.stringify(degradedPetState));
+windowStub.WORD_BANKS.pet = [temporaryPetWord];
+api.invalidateWordCatalogCaches();
+const restoredPetState = api.mergeState(savedWhilePetMissing, true);
+assert.ok(restoredPetState.progress[temporaryPetWord.id], "progress must return when the missing bank loads again");
+assert.equal(restoredPetState.savedWords[temporaryPetWord.id].sources[0].context, "A long journey began.");
+assert.equal(restoredPetState.recognitionEvents[0].cardId, temporaryPetWord.id);
+assert.deepEqual(Array.from(restoredPetState.recognitionPlans["2026-09-28"].cardIds), [temporaryPetWord.id]);
+assert.equal(Object.keys(restoredPetState.unresolvedData.savedWords).length, 0);
+assert.equal(restoredPetState.unresolvedData.recognitionEvents.length, 0);
+assert.equal(Object.keys(restoredPetState.unresolvedData.recognitionPlans).length, 0);
+delete windowStub.WORD_BANKS.pet;
+api.invalidateWordCatalogCaches();
 
 assert.equal(api.shouldRejectStaleWrite(
   { revision: 5 },

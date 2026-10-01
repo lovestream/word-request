@@ -171,6 +171,11 @@
       progress: {},
       lexemeProgress: {},
       orphanProgress: {},
+      unresolvedData: {
+        savedWords: {},
+        recognitionEvents: [],
+        recognitionPlans: {}
+      },
       coreExercises: {},
       badges: {},
       scoreLedger: [],
@@ -488,12 +493,21 @@
     return expectedTaskIds.every((id) => doneIds.has(id));
   }
 
+  function safeHistoricalCardId(value) {
+    const rawId = safeText(value, "", 220).trim();
+    if (!/^[a-z0-9][a-z0-9:._-]{0,219}$/i.test(rawId)) return "";
+    const canonicalId = canonicalWordId(rawId);
+    return typeof canonicalId === "string" && /^[a-z0-9][a-z0-9:._-]{0,219}$/i.test(canonicalId) ? canonicalId : "";
+  }
+
+  function safeHistoricalCardIds(value) {
+    if (!Array.isArray(value)) return [];
+    return [...new Set(value.map(safeHistoricalCardId).filter(Boolean))];
+  }
+
   function safeWordIds(value) {
     if (!Array.isArray(value)) return [];
-    return [...new Set(value
-      .filter((id) => typeof id === "string")
-      .map(canonicalWordId)
-      .filter((id) => Boolean(getWord(id))))];
+    return safeHistoricalCardIds(value).filter((id) => Boolean(getWord(id)));
   }
 
   function sanitizeProgressItem(item) {
@@ -1019,25 +1033,27 @@
     return result;
   }
 
-  function sanitizeSavedWords(raw) {
+  function sanitizeSavedWords(raw, unresolvedSink = null) {
     const result = {};
     if (!raw || typeof raw !== "object" || Array.isArray(raw)) return result;
     for (const [rawId, item] of Object.entries(raw)) {
       if (!item || typeof item !== "object" || Array.isArray(item)) continue;
-      const cardId = canonicalWordId(safeText(item.cardId || rawId, "", 220));
-      if (!getWord(cardId)) continue;
+      const cardId = safeHistoricalCardId(item.cardId || rawId);
+      if (!cardId) continue;
       const legacyAddedAt = finiteNumber(item.addedAt, Date.now(), 0, 9_999_999_999_999);
       const sources = sanitizeReadingSources(
         item.sources,
         legacyAddedAt,
         { sourceTag: item.sourceTag, context: item.context, addedAt: legacyAddedAt }
       );
-      result[cardId] = {
+      const entry = {
         cardId,
         train: Boolean(item.train),
         addedAt: legacyAddedAt,
         sources: sources.length ? sources : [{ sourceTag: "Reading", context: "", addedAt: legacyAddedAt }]
       };
+      if (getWord(cardId)) result[cardId] = entry;
+      else if (unresolvedSink && typeof unresolvedSink === "object" && !Array.isArray(unresolvedSink)) unresolvedSink[cardId] = entry;
     }
     return result;
   }
@@ -1084,18 +1100,20 @@
     return [...unique.values()].sort((left, right) => left.occurredAt - right.occurredAt || left.eventId.localeCompare(right.eventId));
   }
 
-  function sanitizeRecognitionEvents(raw) {
+  function sanitizeRecognitionEvents(raw, unresolvedSink = null) {
     if (!Array.isArray(raw)) return [];
     const unique = new Map();
+    const seenEventIds = new Set();
     for (const item of raw) {
       if (!item || typeof item !== "object" || Array.isArray(item)) continue;
-      const cardId = canonicalWordId(safeText(item.cardId, "", 220));
-      const selectedCardId = canonicalWordId(safeText(item.selectedCardId, "", 220));
-      if (!getWord(cardId) || !getWord(selectedCardId)) continue;
+      const cardId = safeHistoricalCardId(item.cardId);
+      const selectedCardId = safeHistoricalCardId(item.selectedCardId);
+      if (!cardId || !selectedCardId) continue;
       const eventId = safeText(item.eventId, "", 240);
-      if (!/^[a-z0-9:_-]{1,240}$/i.test(eventId) || unique.has(eventId)) continue;
+      if (!/^[a-z0-9:_-]{1,240}$/i.test(eventId) || seenEventIds.has(eventId)) continue;
+      seenEventIds.add(eventId);
       const occurredAt = finiteNumber(item.occurredAt, 0, 0, 9_999_999_999_999);
-      unique.set(eventId, {
+      const event = {
         eventId,
         cardId,
         selectedCardId,
@@ -1108,19 +1126,32 @@
         deviceId: safeText(item.deviceId, "legacy-device", 180),
         sequence: safeInteger(item.sequence, 0, 0, 1_000_000_000),
         appVersion: safeText(item.appVersion, "unknown", 40)
-      });
+      };
+      if (getWord(cardId) && getWord(selectedCardId)) unique.set(eventId, event);
+      else if (Array.isArray(unresolvedSink)) unresolvedSink.push(event);
     }
     return [...unique.values()].sort((left, right) => left.occurredAt - right.occurredAt || left.eventId.localeCompare(right.eventId));
   }
 
-  function sanitizeRecognitionPlans(raw) {
+  function sanitizeRecognitionPlans(raw, unresolvedSink = null) {
     const result = {};
     if (!raw || typeof raw !== "object" || Array.isArray(raw)) return result;
     const rows = Object.entries(raw).filter(([weekKey]) => safeDateKey(weekKey)).slice(-60);
     for (const [weekKey, item] of rows) {
       if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+      const historicalCardIds = safeHistoricalCardIds(item.cardIds).slice(0, 5);
+      if (!historicalCardIds.length) continue;
+      const plan = {
+        weekKey,
+        cardIds: historicalCardIds,
+        startedAt: finiteNumber(item.startedAt, Date.now(), 0, 9_999_999_999_999)
+      };
+      if (historicalCardIds.some((cardId) => !getWord(cardId))) {
+        if (unresolvedSink && typeof unresolvedSink === "object" && !Array.isArray(unresolvedSink)) unresolvedSink[weekKey] = plan;
+        continue;
+      }
       const seenLexemes = new Set();
-      const cardIds = safeWordIds(item.cardIds).filter((cardId) => {
+      const cardIds = historicalCardIds.filter((cardId) => {
         const word = getWord(cardId);
         const lexemeId = lexemeIdForWord(word);
         if (!word || word.archived || !lexemeId || seenLexemes.has(lexemeId)) return false;
@@ -1131,7 +1162,7 @@
       result[weekKey] = {
         weekKey,
         cardIds,
-        startedAt: finiteNumber(item.startedAt, Date.now(), 0, 9_999_999_999_999)
+        startedAt: plan.startedAt
       };
     }
     return result;
@@ -1210,14 +1241,25 @@
       .filter((item) => item && typeof item === "object" && safeDateKey(item.date))
       .slice(-120)
       .map((item) => ({ date: item.date, bank: safeBank(item.bank, settings.bank), learned: safeInteger(item.learned, 0), reviewed: safeInteger(item.reviewed, 0), xp: safeInteger(item.xp, 0) })) : [];
+    const rawUnresolvedData = raw.unresolvedData && typeof raw.unresolvedData === "object" && !Array.isArray(raw.unresolvedData)
+      ? raw.unresolvedData
+      : {};
+    const unresolvedData = {
+      savedWords: {},
+      recognitionEvents: [],
+      recognitionPlans: {}
+    };
     const attemptEvents = sanitizeAttemptEvents(raw.attemptEvents);
-    const recognitionEvents = sanitizeRecognitionEvents(raw.recognitionEvents);
+    const recognitionEvents = sanitizeRecognitionEvents([
+      ...(Array.isArray(raw.recognitionEvents) ? raw.recognitionEvents : []),
+      ...(Array.isArray(rawUnresolvedData.recognitionEvents) ? rawUnresolvedData.recognitionEvents : [])
+    ], unresolvedData.recognitionEvents);
     const historyQuality = ["legacy-summary", "mixed", "event-log"].includes(raw.historyQuality)
       ? raw.historyQuality
       : raw.schemaVersion === 1
         ? (attemptEvents.length || recognitionEvents.length ? "mixed" : "legacy-summary")
         : "event-log";
-    const maxDeviceAttemptSequence = [...attemptEvents, ...recognitionEvents].reduce(
+    const maxDeviceAttemptSequence = [...attemptEvents, ...recognitionEvents, ...unresolvedData.recognitionEvents].reduce(
       (maximum, event) => event.deviceId === DEVICE_ID ? Math.max(maximum, event.sequence) : maximum,
       0
     );
@@ -1225,7 +1267,14 @@
     const progress = restoreInitialModesFromLedger(sanitizeProgress(raw.progress, orphanProgress), scoreLedger);
     restoreOrphanProgress(raw.orphanProgress, progress, orphanProgress);
     const lexemeProgress = sanitizeLexemeProgress(raw.lexemeProgress, progress);
-    const savedWords = sanitizeSavedWords(raw.savedWords);
+    const savedWords = sanitizeSavedWords({
+      ...(rawUnresolvedData.savedWords && typeof rawUnresolvedData.savedWords === "object" && !Array.isArray(rawUnresolvedData.savedWords) ? rawUnresolvedData.savedWords : {}),
+      ...(raw.savedWords && typeof raw.savedWords === "object" && !Array.isArray(raw.savedWords) ? raw.savedWords : {})
+    }, unresolvedData.savedWords);
+    const recognitionPlans = sanitizeRecognitionPlans({
+      ...(rawUnresolvedData.recognitionPlans && typeof rawUnresolvedData.recognitionPlans === "object" && !Array.isArray(rawUnresolvedData.recognitionPlans) ? rawUnresolvedData.recognitionPlans : {}),
+      ...(raw.recognitionPlans && typeof raw.recognitionPlans === "object" && !Array.isArray(raw.recognitionPlans) ? raw.recognitionPlans : {})
+    }, unresolvedData.recognitionPlans);
     return {
       schemaVersion: STATE_SCHEMA_VERSION,
       migratedFromSchema: raw.schemaVersion === 1 ? 1 : (raw.migratedFromSchema === 1 ? 1 : null),
@@ -1245,12 +1294,13 @@
       progress,
       lexemeProgress,
       orphanProgress,
+      unresolvedData,
       coreExercises: sanitizeCoreExercises(raw.coreExercises),
       badges,
       scoreLedger,
       attemptEvents,
       recognitionEvents,
-      recognitionPlans: sanitizeRecognitionPlans(raw.recognitionPlans),
+      recognitionPlans,
       attemptSequence: Math.max(
         safeInteger(raw.attemptSequence, 0, 0, 1_000_000_000),
         maxDeviceAttemptSequence
@@ -1434,6 +1484,12 @@
   }
 
   function invalidateCustomCatalog() {
+    cachedLexemeMembers = null;
+  }
+
+  function invalidateWordCatalogCaches() {
+    cachedWordIndex = null;
+    cachedBankWordIds = null;
     cachedLexemeMembers = null;
   }
 
@@ -1780,6 +1836,7 @@
 
   function weeklyCheckPlan(source = state, date = new Date()) {
     const weekKey = localWeekKey(date);
+    if (source?.unresolvedData?.recognitionPlans?.[weekKey]?.cardIds?.length) return [];
     const frozen = source?.recognitionPlans?.[weekKey]?.cardIds;
     if (Array.isArray(frozen) && frozen.length) return safeWordIds(frozen).slice(0, 5);
     return weeklyCheckCandidates(source, date);
@@ -1787,6 +1844,7 @@
 
   function ensureWeeklyCheckPlan(source = state, date = new Date(), startedAt = Date.now()) {
     const weekKey = localWeekKey(date);
+    if (source?.unresolvedData?.recognitionPlans?.[weekKey]?.cardIds?.length) return [];
     source.recognitionPlans ||= {};
     const existing = source.recognitionPlans[weekKey];
     if (Array.isArray(existing?.cardIds) && existing.cardIds.length) return safeWordIds(existing.cardIds).slice(0, 5);
@@ -5561,6 +5619,7 @@
     sanitizeAttemptEvents,
     sanitizeRecognitionEvents,
     sanitizeRecognitionPlans,
+    invalidateWordCatalogCaches,
     sanitizeCustomWordDraft,
     sanitizeCustomWords,
     sanitizeSavedWords,
