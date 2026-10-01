@@ -226,6 +226,15 @@ assert.equal(api.selectAmericanVoice([{ name: "Bad News", lang: "en-US" }]), nul
 assert.equal(api.speechVoiceLabel([{ name: "Samantha Enhanced", lang: "en-US" }]), "US voice · en-US");
 assert.equal(api.speechVoiceLabel([{ name: "Daniel Premium", lang: "en-GB" }]), "English fallback · en-GB");
 assert.equal(api.speechVoiceLabel([]), "en-US voice requested");
+const voiceLabelNode = { textContent: "unchanged" };
+const updatedVoiceLabel = api.updateVoiceLabels([{ name: "Samantha Enhanced", lang: "en-US" }], {
+  querySelectorAll(selector) {
+    assert.equal(selector, '[data-role="voice-label"]');
+    return [voiceLabelNode];
+  }
+});
+assert.equal(updatedVoiceLabel, "US voice · en-US");
+assert.equal(voiceLabelNode.textContent, "· US voice · en-US", "voice refresh must update only the visible label text");
 assert.deepEqual(
   JSON.parse(JSON.stringify(api.buildStudySpeechSequence(
     "blood",

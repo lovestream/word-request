@@ -2626,6 +2626,19 @@
     return /^en-US/i.test(language) ? `US voice · ${language}` : `English fallback · ${language}`;
   }
 
+  function updateVoiceLabels(voices = null, scope = document) {
+    const availableVoices = Array.isArray(voices)
+      ? voices
+      : "speechSynthesis" in window
+        ? window.speechSynthesis.getVoices()
+        : [];
+    const label = speechVoiceLabel(availableVoices);
+    scope.querySelectorAll?.('[data-role="voice-label"]').forEach((node) => {
+      node.textContent = `· ${label}`;
+    });
+    return label;
+  }
+
   function speak(text, button = null, rate = 0.78) {
     if (!text) return;
     if (!state.settings.sound) {
@@ -3322,7 +3335,7 @@
             <div class="word-title-row">
               <div>
                 <button class="study-word word-trigger ${word.word.includes(" ") ? "is-phrase" : ""}" type="button" data-action="toggle-breakdown" aria-expanded="${runtime.breakdownOpen}">${escapeHtml(word.word)}</button>
-                <div class="ipa-row"><span title="Dictionary IPA; browser speech may use a different English voice">${escapeHtml(word.ipa || "/—/")}</span>${word.pos?.length ? `<span class="pos-pill">${escapeHtml(Array.isArray(word.pos) ? word.pos.join(" · ") : word.pos)}</span>` : ""}<small>· ${escapeHtml(voiceLabel)}</small></div>
+                <div class="ipa-row"><span title="Dictionary IPA; browser speech may use a different English voice">${escapeHtml(word.ipa || "/—/")}</span>${word.pos?.length ? `<span class="pos-pill">${escapeHtml(Array.isArray(word.pos) ? word.pos.join(" · ") : word.pos)}</span>` : ""}<small data-role="voice-label">· ${escapeHtml(voiceLabel)}</small></div>
                 ${word.custom && word.lemma && normalizeAnswer(word.lemma) !== normalizeAnswer(word.word) ? `<div class="study-form-relation"><span>WORD FAMILY</span><strong>${escapeHtml(word.word)} → ${escapeHtml(word.lemma)}</strong>${word.formType ? `<small>${escapeHtml(word.formType)}</small>` : ""}</div>` : ""}
               </div>
               <button class="sound-button is-sequence" type="button" data-action="speak-sequence" data-word="${escapeHtml(word.word)}" data-definition="${escapeHtml(studyDefinition)}" data-example="${escapeHtml(word.example || "")}" aria-label="${coreEnglish ? "Play the word, definition, and example" : "依次播放单词、英文释义和例句"}" title="${coreEnglish ? "Play word → definition → example" : "连读：单词 → 英文释义 → 例句"}"><span>▶</span><small>${coreEnglish ? "PLAY ALL" : "连读"}</small></button>
@@ -5386,6 +5399,7 @@
     createAttemptEvent,
     selectAmericanVoice,
     speechVoiceLabel,
+    updateVoiceLabels,
     buildStudySpeechSequence,
     spellingVariants,
     answerFormsFor,
@@ -5453,6 +5467,9 @@
   };
 
   if (window.__WORD_QUEST_TEST_ONLY__) return;
+  if ("speechSynthesis" in window && typeof window.speechSynthesis.addEventListener === "function") {
+    window.speechSynthesis.addEventListener("voiceschanged", () => updateVoiceLabels());
+  }
   const availability = bankAvailability();
   if (!firstAvailableBank()) {
     root.innerHTML = `<section class="view-page empty-state"><div><span class="empty-icon">⚠️</span><h1>词库没有加载成功</h1><p>四个词库数据文件都没有加载。请检查网站目录中的 assets 文件。</p><button class="btn btn-primary" type="button" data-action="reload-app">重新加载</button></div></section>`;

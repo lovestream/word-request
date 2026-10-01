@@ -1,0 +1,26 @@
+name: test
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - run: node tests/test_word_banks.js
+      - run: node tests/test_app_regressions.js
+      - run: node tests/test_sprint_mode.js
+      - run: node tests/test_learning_record_tools.js
+      - run: python3 -m unittest tests/test_launcher.py
