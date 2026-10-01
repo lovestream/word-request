@@ -509,6 +509,16 @@ const recognitionMetrics = api.learningMetrics({
 }, metricsNow);
 assert.equal(recognitionMetrics.recognized, 1);
 assert.equal(recognitionMetrics.recognitionMeasured, true);
+const checkupMetrics = api.recognitionMetrics({ recognitionEvents: [
+  ...recognitionEvents,
+  { eventId: "recognition:device:3", cardId: "core2000:test", senseId: "core2000:test:default", occurredAt: metricsNow - 7 * 86_400_000, weekKey: "2026-09-21", correct: false },
+  { eventId: "recognition:device:4", cardId: "core2000:truck", senseId: "core2000:truck:default", occurredAt: metricsNow - 7 * 86_400_000, weekKey: "2026-09-21", correct: true }
+] }, metricsNow);
+assert.deepEqual(JSON.parse(JSON.stringify(checkupMetrics.currentWeek)), { weekKey: "2026-09-28", correct: 1, total: 1 });
+assert.equal(checkupMetrics.averagePercent, 67, "four-week average must use actual checkup answers, not total learned words");
+assert.equal(checkupMetrics.uniqueCorrectEver, 2);
+assert.equal(checkupMetrics.testedUniqueEver, 3);
+assert.equal(checkupMetrics.completedThisWeek, true);
 
 assert.equal(api.localWeekKey(new Date(2026, 8, 30, 12)), "2026-09-28");
 const weeklyPlan = api.weeklyCheckPlan({

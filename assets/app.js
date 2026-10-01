@@ -1557,6 +1557,8 @@
     const recentReviewAttempts = recentFirstAttempts.filter((event) => event.source === "review");
     const firstAttemptCorrect = recentFirstAttempts.filter((event) => event.firstAttemptCorrect && !event.usedHint && !event.answerShown).length;
     const retainedReviews = recentReviewAttempts.filter((event) => event.firstAttemptCorrect && !event.usedHint && !event.answerShown).length;
+    const againCount = recentEvents.filter((event) => event.grade === "again").length;
+    const hardCount = recentEvents.filter((event) => event.grade === "hard").length;
     const timedEvents = recentEvents.filter((event) => event.durationMs > 0);
     const activeDays = new Set(recentEvents.map((event) => localDateKey(new Date(event.occurredAt))));
     const difficulty = new Map();
@@ -1583,6 +1585,8 @@
       retentionRate: recentReviewAttempts.length ? Math.round(retainedReviews / recentReviewAttempts.length * 100) : null,
       firstAttemptCount: recentFirstAttempts.length,
       reviewAttemptCount: recentReviewAttempts.length,
+      againCount,
+      hardCount,
       averageActiveMinutes: activeDays.size && timedEvents.length
         ? Math.round(timedEvents.reduce((total, event) => total + event.durationMs, 0) / activeDays.size / 60_000 * 10) / 10
         : null,
@@ -1598,6 +1602,32 @@
     const day = monday.getDay() || 7;
     monday.setDate(monday.getDate() - day + 1);
     return localDateKey(monday);
+  }
+
+  function recognitionMetrics(source = state, now = Date.now()) {
+    const events = (source?.recognitionEvents || []).filter((event) => event && event.occurredAt <= now);
+    const currentWeekKey = localWeekKey(new Date(now));
+    const weekKeys = Array.from({ length: 4 }, (_, index) => localWeekKey(new Date(now - index * 7 * DAY_MS))).reverse();
+    const last4Weeks = weekKeys.map((weekKey) => {
+      const weekEvents = events.filter((event) => event.weekKey === weekKey);
+      return {
+        weekKey,
+        correct: weekEvents.filter((event) => event.correct).length,
+        total: weekEvents.length
+      };
+    });
+    const currentWeek = last4Weeks.find((week) => week.weekKey === currentWeekKey) || { weekKey: currentWeekKey, correct: 0, total: 0 };
+    const measuredWeeks = last4Weeks.filter((week) => week.total > 0);
+    const measuredCorrect = measuredWeeks.reduce((sum, week) => sum + week.correct, 0);
+    const measuredTotal = measuredWeeks.reduce((sum, week) => sum + week.total, 0);
+    return {
+      currentWeek,
+      last4Weeks,
+      averagePercent: measuredTotal ? Math.round(measuredCorrect / measuredTotal * 100) : null,
+      completedThisWeek: currentWeek.total > 0,
+      uniqueCorrectEver: new Set(events.filter((event) => event.correct).map((event) => event.senseId || `${event.cardId}:default`)).size,
+      testedUniqueEver: new Set(events.map((event) => event.senseId || `${event.cardId}:default`)).size
+    };
   }
 
   function weeklyCheckPlan(source = state, date = new Date()) {
@@ -3799,26 +3829,35 @@
 
   function renderParentReport() {
     const metrics = learningMetrics();
+    const recognition = recognitionMetrics();
+    const qualityValue = (rate, count) => count < 10
+      ? `<strong class="is-pending">样本还少</strong><span>先继续积累（${count}/10）</span>`
+      : `<strong>${metricValue(rate, "%")}</strong><span>${count} 次首答</span>`;
     const difficultRows = metrics.difficultWords.map((item) => {
       const progress = spellingProgress(item.cardId);
       const due = progress?.dueAt ? relativeTime(progress.dueAt) : "未排期";
-      return `<tr><th scope="row">${escapeHtml(item.word)}</th><td>${item.again}</td><td>${item.hard}</td><td>${escapeHtml(due)}</td></tr>`;
+      const stage = progress?.status === "mature" ? "Mature" : progress?.status === "relearning" ? "Relearning" : progress?.step != null ? `Stage ${safeInteger(progress.step, 0) + 1}` : "Learning";
+      return `<tr><th scope="row">${escapeHtml(item.word)}</th><td>${item.again}</td><td>${item.hard}</td><td>${escapeHtml(stage)}</td><td>${escapeHtml(due)}</td></tr>`;
     }).join("");
+    const historyNote = state.historyQuality === "legacy-summary"
+      ? "早期记录只有汇总数据，从 V2 开始才有逐题证据。"
+      : state.historyQuality === "mixed"
+        ? "报告中的逐题指标只计算 V2 以后有证据的答题。"
+        : "";
     return `<section class="view-page parent-report-page">
-      <div class="page-heading"><div><p class="eyebrow">PARENT LEARNING REPORT</p><h1>只看真实证据，不把“翻过卡片”当作掌握</h1><p>以下数据来自 Kevin 的独立首答、复习结果和长期排期；旧版本没有逐题日志的部分不会被凭空补齐。</p></div><span class="date-stamp">最近 30 天</span></div>
+      <header class="parent-report-header"><div><p class="eyebrow">PARENT LEARNING REPORT</p><h1>Kevin 的词汇学习报告</h1><p>只统计能够证明的学习证据；旧版没有逐题记录的部分不会被反推。</p></div><span class="date-stamp">最近 30 天</span></header>
+      ${historyNote ? `<div class="parent-history-note">${escapeHtml(historyNote)}</div>` : ""}
       <section class="parent-level-grid" aria-label="词汇能力分层">
-        <article><span>01 · SEEN</span><strong>${metrics.seen}</strong><p>看过并进入学习记录</p></article>
-        <article class="${metrics.recognitionMeasured ? "" : "is-unmeasured"}"><span>02 · RECOGNIZED</span><strong>${metricValue(metrics.recognized)}</strong><p>${metrics.recognitionMeasured ? "每周独立识词抽检答对" : "尚无独立选择题证据，不用拼写成绩冒充"}</p></article>
-        <article><span>03 · RECALLED SPELLING</span><strong>${metrics.independentlySpelled}</strong><p>完整拼写首次独立答对</p></article>
-        <article><span>04 · LONG-TERM</span><strong>${metrics.mature}</strong><p>进入 60 天以上仍继续抽检</p></article>
+        <article><span>SEEN</span><strong>${metrics.seen}</strong><p>已接触独立词形</p></article>
+        <article><span>INDEPENDENT SPELLING</span><strong>${metrics.independentlySpelled}</strong><p>至少一次完整拼写首答独立正确</p></article>
+        <article><span>LONG-TERM</span><strong>${metrics.mature}</strong><p>当前进入 mature 低频复习</p></article>
+        <article class="${recognition.completedThisWeek ? "" : "is-unmeasured"}"><span>WEEKLY RECOGNITION</span><strong>${recognition.completedThisWeek ? `${recognition.currentWeek.correct}/${recognition.currentWeek.total}` : "未抽检"}</strong><p>${recognition.averagePercent == null ? "近 4 周还没有独立抽检" : `近 4 周平均 ${recognition.averagePercent}%`}</p></article>
       </section>
-      <div class="parent-report-grid">
-        <section class="paper-card parent-summary-card"><div class="card-head"><div><h2>学习流量</h2><p>控制新词流入，优先守住旧记忆</p></div></div><div class="parent-number-grid"><div><strong>${metrics.new7}</strong><span>7 天新接触</span></div><div><strong>${metrics.new30}</strong><span>30 天新接触</span></div><div><strong>${metrics.backlog}</strong><span>安全延期积压</span></div><div><strong>${metrics.activeDays30}</strong><span>30 天活跃日</span></div></div></section>
-        <section class="paper-card parent-summary-card"><div class="card-head"><div><h2>回忆质量</h2><p>只统计有逐题证据的记录</p></div></div><div class="parent-number-grid"><div><strong>${metricValue(metrics.firstAttemptRate, "%")}</strong><span>完整拼写首答正确率</span></div><div><strong>${metricValue(metrics.retentionRate, "%")}</strong><span>旧词独立保持率</span></div><div><strong>${metricValue(metrics.averageActiveMinutes)}</strong><span>活跃日可记录答题分钟</span></div><div><strong>${metrics.reviewAttemptCount}</strong><span>30 天独立复习首答</span></div></div></section>
-      </div>
-      <section class="paper-card parent-checkup-card"><div><p class="eyebrow">3–5 MINUTES · ONCE A WEEK</p><h2>每周独立识词抽检</h2><p>随机抽取最多 5 个非当天新词，只记录第一次选择，不给金币压力。</p></div><button class="btn btn-primary" type="button" data-route="checkup">开始／继续本周抽检 →</button></section>
-      <section class="paper-card parent-difficult-card"><div class="card-head"><div><h2>最近的困难词</h2><p>Again 权重高于 Hard；用于决定减量或多给一次回访，不用于惩罚。</p></div><button class="btn btn-small btn-soft" type="button" data-route="settings">调整每日新词上限</button></div>${difficultRows ? `<div class="parent-table-wrap"><table><thead><tr><th>单词</th><th>Again</th><th>Hard</th><th>下次回访</th></tr></thead><tbody>${difficultRows}</tbody></table></div>` : `<div class="book-empty">最近 30 天还没有可用的困难词逐题证据。</div>`}</section>
-      <section class="parent-data-note"><strong>${metrics.hasEventEvidence ? "逐题证据已启用" : "当前主要是旧版汇总记录"}</strong><p>“可记录答题分钟”只包括有计时的拼写作答，不等于 Kevin 的完整学习时长；识词能力将在独立轻量测验上线后单独统计。</p></section>
+      <section class="parent-summary-card"><div class="parent-section-heading"><div><p class="eyebrow">LEARNING LOAD</p><h2>本月学习负荷</h2></div><p>积压会安全延后，不算今天失败。</p></div><div class="parent-number-grid is-five"><div><strong>${metrics.new7}</strong><span>7 天新接触</span></div><div><strong>${metrics.new30}</strong><span>30 天新接触</span></div><div><strong>${metrics.backlog}</strong><span>backlog</span></div><div><strong>${metrics.activeDays30}</strong><span>活跃学习日</span></div><div><strong>${metricValue(metrics.averageActiveMinutes)}</strong><span>平均可记录拼写分钟</span></div></div><small class="parent-evidence-caption">可记录拼写分钟 ≠ 全部学习时长</small></section>
+      <section class="parent-summary-card"><div class="parent-section-heading"><div><p class="eyebrow">MEMORY QUALITY</p><h2>记忆质量</h2></div><p>只统计最近 30 天有逐题证据的首答。</p></div><div class="parent-number-grid"><div>${qualityValue(metrics.firstAttemptRate, metrics.firstAttemptCount)}<em>完整拼写首答正确率</em></div><div>${qualityValue(metrics.retentionRate, metrics.reviewAttemptCount)}<em>旧词独立保持率</em></div><div><strong>${metrics.reviewAttemptCount}</strong><span>review first attempts</span></div><div><strong>${metrics.againCount} / ${metrics.hardCount}</strong><span>Again / Hard</span></div></div></section>
+      <section class="parent-checkup-card"><div><p class="eyebrow">3–5 MINUTES · ONCE A WEEK</p><h2>每周独立识词抽检</h2><p>${recognition.completedThisWeek ? `本周已完成 ${recognition.currentWeek.correct}/${recognition.currentWeek.total}；` : "本周尚未完成；"}${recognition.averagePercent == null ? "近 4 周暂无结果。" : `近 4 周平均 ${recognition.averagePercent}%。`} 累计抽检中已独立认出 ${recognition.uniqueCorrectEver} 个不同词（不是总词汇量估计）。</p></div><button class="btn btn-primary" type="button" data-route="checkup">${recognition.completedThisWeek ? "查看本周抽检" : "开始本周抽检"} →</button></section>
+      <section class="parent-difficult-card"><div class="parent-section-heading"><div><p class="eyebrow">RECENT FRICTION</p><h2>最近的困难词</h2></div><p>Again 权重高于 Hard，用于安排回访，不用于惩罚。</p></div>${difficultRows ? `<div class="parent-table-wrap"><table><thead><tr><th>Word</th><th>Again</th><th>Hard</th><th>Current stage</th><th>Next review</th></tr></thead><tbody>${difficultRows}</tbody></table></div>` : `<div class="book-empty">最近 30 天还没有可用的困难词逐题证据。</div>`}</section>
+      <section class="parent-data-note"><strong>${metrics.hasEventEvidence ? "逐题证据已启用" : "当前主要是旧版汇总记录"}</strong><p>抽检结果只代表实际抽到的题；不会把它外推成 Kevin 的总词汇量。</p></section>
     </section>`;
   }
 
@@ -5298,6 +5337,7 @@
     hasCompletedInitialStudy,
     learnAvailability,
     learningMetrics,
+    recognitionMetrics,
     missingAssetLabel,
     localWeekKey,
     weeklyCheckPlan,
