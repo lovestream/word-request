@@ -6,7 +6,7 @@
   const BACKUP_FORMAT = "kevin-word-quest-portable-record";
   const STATE_SCHEMA_VERSION = 2;
   const BACKUP_FORMAT_VERSION = 2;
-  const APP_VERSION = "2026.09.30";
+  const APP_VERSION = "2026.10.01";
   const DEVICE_KEY = "kevin-wordquest:device-id:v1";
   const DAY_MS = 86_400_000;
   const WRITER_ID = window.crypto?.randomUUID?.() || `tab-${Date.now()}-${Math.random().toString(36).slice(2)}`;
@@ -235,6 +235,12 @@
     if (typeof value === "string" && Object.prototype.hasOwnProperty.call(BANK_META, value)) return firstAvailableBank() || "core2000";
     if (typeof fallback === "string" && isBankAvailable(fallback)) return fallback;
     return firstAvailableBank() || "core2000";
+  }
+
+  function safeKnownBank(value, fallback = "ket") {
+    if (typeof value === "string" && Object.prototype.hasOwnProperty.call(BANK_META, value)) return value;
+    if (typeof fallback === "string" && Object.prototype.hasOwnProperty.call(BANK_META, fallback)) return fallback;
+    return "core2000";
   }
 
   function bankAvailability() {
@@ -472,6 +478,38 @@
     };
   }
 
+  function sanitizeUnavailableSprintState(rawSprint, bankKey, fallbackDay) {
+    const day = safeInteger(rawSprint?.day, safeInteger(fallbackDay, 1, 1, 999), 1, 999);
+    const wordIds = safeHistoricalCardIds(rawSprint?.wordIds).slice(0, 50);
+    const allowedIds = new Set(wordIds);
+    let phase = ["cloze", "full", "drill", "final", "complete"].includes(rawSprint?.phase)
+      ? rawSprint.phase
+      : "cloze";
+    const mistakeIds = safeHistoricalCardIds(rawSprint?.mistakeIds).filter((id) => allowedIds.has(id));
+    if (phase === "drill" && mistakeIds.length === 0) phase = "final";
+    const roundHistory = Array.isArray(rawSprint?.roundHistory)
+      ? rawSprint.roundHistory.slice(-20).map((item) => ({
+        cycle: safeInteger(item?.cycle, 1, 0, 999),
+        score: safeInteger(item?.score, 0, 0, wordIds.length),
+        mistakes: safeHistoricalCardIds(item?.mistakes).filter((id) => allowedIds.has(id))
+      }))
+      : [];
+    return {
+      sessionId: typeof rawSprint?.sessionId === "string" && /^[a-z0-9:_-]{1,180}$/i.test(rawSprint.sessionId)
+        ? rawSprint.sessionId
+        : `${bankKey}:paused:${Date.now()}`,
+      day,
+      scheduleKey: safeText(rawSprint?.scheduleKey, "paused-catalog", 180),
+      wordIds,
+      phase,
+      cycle: safeInteger(rawSprint?.cycle, 1, 1, 999),
+      awaitingStart: phase === "complete" ? false : Boolean(rawSprint?.awaitingStart),
+      mistakeIds,
+      lastScore: safeInteger(rawSprint?.lastScore, 0, 0, wordIds.length),
+      roundHistory
+    };
+  }
+
   function evaluateSprintPhase(phase, tasks, allWordIds, cycle = 1) {
     const orderedIds = [...allWordIds];
     const cleanIds = new Set(tasks.filter((task) => task.cleanPass).map((task) => task.wordId));
@@ -636,6 +674,9 @@
         .filter((index) => index >= 0 && index < answerCount))].sort((a, b) => a - b);
       const attempts = safeInteger(item.attempts, 0, 0, 1000);
       const hasFirstAttemptEvidence = item.evidenceQuality === "event-log" && item.firstAttemptAt != null && Array.isArray(item.firstAttemptResponses);
+      const completedAt = correctIndices.length === answerCount && item.completedAt != null
+        ? finiteNumber(item.completedAt, null, 0, 9_999_999_999_999)
+        : null;
       const submissions = (Array.isArray(item.submissions) ? item.submissions : []).slice(-20).map((submission) => {
         if (!submission || typeof submission !== "object" || Array.isArray(submission)) return null;
         const submissionCorrect = sanitizeIndices(submission.correctIndices);
@@ -653,9 +694,10 @@
         correctIndices,
         wrongIndices,
         attempts,
-        completedAt: correctIndices.length === answerCount && item.completedAt != null
-          ? finiteNumber(item.completedAt, null, 0, 9_999_999_999_999)
-          : null,
+        completedAt,
+        rewardedAt: item.rewardedAt != null
+          ? finiteNumber(item.rewardedAt, null, 0, 9_999_999_999_999)
+          : completedAt,
         firstAttemptAt: hasFirstAttemptEvidence ? finiteNumber(item.firstAttemptAt, null, 0, 9_999_999_999_999) : null,
         firstAttemptResponses: hasFirstAttemptEvidence ? Array.from({ length: answerCount }, (_, index) => safeText(item.firstAttemptResponses?.[index], "", 120)) : [],
         firstAttemptCorrectIndices: hasFirstAttemptEvidence ? sanitizeIndices(item.firstAttemptCorrectIndices) : [],
@@ -711,19 +753,25 @@
 
   function sanitizeToday(rawToday, settings, progress = {}, lexemeProgress = {}, savedWords = {}) {
     if (!rawToday || typeof rawToday !== "object" || Array.isArray(rawToday) || !safeDateKey(rawToday.date)) return null;
-    const bank = safeBank(rawToday.bank, settings.bank);
+    const bank = safeKnownBank(rawToday.catalogUnavailableBank || rawToday.bank, settings.bank);
+    const catalogUnavailableBank = !rawToday.completed && !isBankAvailable(bank) ? bank : "";
+    const sanitizeTodayIds = catalogUnavailableBank ? safeHistoricalCardIds : safeWordIds;
     const practiceMode = ["mixed", "cloze", "full", "sprint"].includes(rawToday.practiceMode) ? rawToday.practiceMode : settings.practiceMode;
     const isSprint = practiceMode === "sprint";
-    const sprint = isSprint ? sanitizeSprintState(rawToday.sprint, bank, sprintDayFor(bank, settings)) : null;
+    const sprint = isSprint
+      ? catalogUnavailableBank
+        ? sanitizeUnavailableSprintState(rawToday.sprint, bank, sprintDayFor(bank, settings))
+        : sanitizeSprintState(rawToday.sprint, bank, sprintDayFor(bank, settings))
+      : null;
     const allowedNewIds = new Set([
       ...bankWordIds(bank),
       ...savedTrainingIds({ savedWords }),
-      ...safeWordIds(rawToday.newIds)
+      ...sanitizeTodayIds(rawToday.newIds)
     ]);
     const rawNewIds = isSprint
       ? [...sprint.wordIds]
-      : safeWordIds(rawToday.newIds).filter((id) => allowedNewIds.has(id));
-    const rawDueAllIds = safeWordIds([
+      : sanitizeTodayIds(rawToday.newIds).filter((id) => allowedNewIds.has(id));
+    const rawDueAllIds = sanitizeTodayIds([
       ...(rawToday.dueAllIds || []),
       ...(rawToday.baselineDueIds || []),
       ...(rawToday.dueIds || []),
@@ -738,19 +786,19 @@
     const plannedReviewIds = isSprint
       ? []
       : hasFrozenPlan
-        ? safeWordIds(rawToday.plannedReviewIds || rawToday.baselineDueIds || rawToday.dueIds).filter((id) => Boolean(progress[id]))
+        ? sanitizeTodayIds(rawToday.plannedReviewIds || rawToday.baselineDueIds || rawToday.dueIds).filter((id) => Boolean(progress[id]))
         : generatedPlan.plannedReviewIds;
     const plannedReviewSet = new Set(plannedReviewIds);
     const dueAllIds = [...new Set([...rawDueAllIds, ...plannedReviewIds])];
     const reviewBacklogIds = isSprint
       ? dueAllIds
       : [...new Set([
-        ...safeWordIds(rawToday.reviewBacklogIds).filter((id) => Boolean(progress[id])),
+        ...sanitizeTodayIds(rawToday.reviewBacklogIds).filter((id) => Boolean(progress[id])),
         ...dueAllIds.filter((id) => !plannedReviewSet.has(id))
       ])];
     const protectedNewIds = new Set([
-      ...safeWordIds(rawToday.learnedIds),
-      ...safeWordIds(rawToday.practicedIds),
+      ...sanitizeTodayIds(rawToday.learnedIds),
+      ...sanitizeTodayIds(rawToday.practicedIds),
       ...(Array.isArray(rawToday.tasks)
         ? rawToday.tasks.filter((task) => task?.source === "new" && (task.status !== "queued" || safeInteger(task.attempts, 0) > 0)).map((task) => task.wordId)
         : [])
@@ -770,11 +818,11 @@
     const deferredNewIds = isSprint
       ? []
       : [...new Set([
-        ...safeWordIds(rawToday.deferredNewIds).filter((id) => allowedNewIds.has(id)),
+        ...sanitizeTodayIds(rawToday.deferredNewIds).filter((id) => allowedNewIds.has(id)),
         ...rawNewIds.filter((id) => !newIds.includes(id))
       ])];
     const newIdSet = new Set(newIds);
-    const learnedIds = safeWordIds(rawToday.learnedIds).filter((id) => newIdSet.has(id));
+    const learnedIds = sanitizeTodayIds(rawToday.learnedIds).filter((id) => newIdSet.has(id));
     const learnedIdSet = new Set(learnedIds);
     const dueIds = [...plannedReviewIds];
     const dueIdSet = new Set(dueIds);
@@ -843,11 +891,12 @@
     return {
       date: rawToday.date,
       bank,
+      catalogUnavailableBank,
       goal: isSprint ? Math.max(1, sprint.wordIds.length) : newIds.length,
       practiceMode,
       sprint,
-      coreBatchId: bank === "core2000" && coreBatchById(rawToday.coreBatchId) ? rawToday.coreBatchId : null,
-      coreExerciseId: bank === "core2000" && (coreCourse().batches || []).some((batch) => batch.exercise?.id === rawToday.coreExerciseId) ? rawToday.coreExerciseId : null,
+      coreBatchId: bank === "core2000" && (catalogUnavailableBank || coreBatchById(rawToday.coreBatchId)) ? safeText(rawToday.coreBatchId, "", 180) || null : null,
+      coreExerciseId: bank === "core2000" && (catalogUnavailableBank || (coreCourse().batches || []).some((batch) => batch.exercise?.id === rawToday.coreExerciseId)) ? safeText(rawToday.coreExerciseId, "", 180) || null : null,
       planVersion: DAILY_PLAN_VERSION,
       plannedAt: finiteNumber(rawToday.plannedAt, Date.now(), 0, 9_999_999_999_999),
       dueAllIds,
@@ -863,15 +912,19 @@
       ),
       newIds,
       deferredNewIds,
-      carryoverIds: isSprint ? [] : safeWordIds(rawToday.carryoverIds).filter((id) => newIdSet.has(id)),
+      carryoverIds: isSprint ? [] : sanitizeTodayIds(rawToday.carryoverIds).filter((id) => newIdSet.has(id)),
       learnedIds,
-      practicedIds: safeWordIds(rawToday.practicedIds).filter((id) => newIdSet.has(id)),
+      practicedIds: sanitizeTodayIds(rawToday.practicedIds).filter((id) => newIdSet.has(id)),
       dueIds,
       baselineDueIds: dueIds,
-      reviewDoneIds: safeWordIds(rawToday.reviewDoneIds).filter((id) => Boolean(progress[id])),
+      reviewDoneIds: sanitizeTodayIds(rawToday.reviewDoneIds).filter((id) => Boolean(progress[id])),
       studyCursor: safeInteger(rawToday.studyCursor, 0, 0, 10_000),
       tasks,
-      pausedAt: rawToday.pausedAt == null ? null : finiteNumber(rawToday.pausedAt, null, 0, 9_999_999_999_999),
+      pausedAt: catalogUnavailableBank
+        ? rawToday.pausedAt == null
+          ? Date.now()
+          : finiteNumber(rawToday.pausedAt, Date.now(), 0, 9_999_999_999_999)
+        : rawToday.pausedAt == null ? null : finiteNumber(rawToday.pausedAt, null, 0, 9_999_999_999_999),
       goalAwarded: Boolean(rawToday.goalAwarded),
       completed: Boolean(rawToday.completed),
       sessionXp: safeInteger(rawToday.sessionXp, 0),
@@ -1240,7 +1293,7 @@
     const history = Array.isArray(raw.history) ? raw.history
       .filter((item) => item && typeof item === "object" && safeDateKey(item.date))
       .slice(-120)
-      .map((item) => ({ date: item.date, bank: safeBank(item.bank, settings.bank), learned: safeInteger(item.learned, 0), reviewed: safeInteger(item.reviewed, 0), xp: safeInteger(item.xp, 0) })) : [];
+      .map((item) => ({ date: item.date, bank: safeKnownBank(item.bank, settings.bank), learned: safeInteger(item.learned, 0), reviewed: safeInteger(item.reviewed, 0), xp: safeInteger(item.xp, 0) })) : [];
     const rawUnresolvedData = raw.unresolvedData && typeof raw.unresolvedData === "object" && !Array.isArray(raw.unresolvedData)
       ? raw.unresolvedData
       : {};
@@ -1310,7 +1363,7 @@
       history,
       dailyCompletion: sanitizeDailyCompletion(raw.dailyCompletion),
       courseCompletion: sanitizeCourseCompletion(raw.courseCompletion),
-      today: sanitizeToday(raw.today, settings, progress, lexemeProgress, savedWords)
+      today: sanitizeToday(raw.today, settings, { ...orphanProgress, ...progress }, lexemeProgress, savedWords)
     };
     } finally {
       customCatalogOverride = previousCatalogOverride;
@@ -1418,10 +1471,22 @@
     );
   }
 
+  function coreSetIsCompleteInState(targetState, day) {
+    if (!day?.coreBatchId) return false;
+    const batch = coreBatchById(day.coreBatchId);
+    if (!batch?.wordIds?.length) return false;
+    return batch.wordIds.every((wordId) => {
+      const cardProgress = targetState.progress?.[wordId];
+      const lexemeProgress = targetState.lexemeProgress?.[lexemeIdForWord(wordId)];
+      const modes = new Set(cardProgress?.initialModesDone || []);
+      return Boolean((lexemeProgress?.dueAt || cardProgress?.dueAt) && modes.has("cloze") && modes.has("full"));
+    });
+  }
+
   function recordCompletionState(targetState, day, completedAt, isNewDailyCompletion) {
     targetState.dailyCompletion ||= {};
     targetState.courseCompletion ||= {};
-    if (day.coreBatchId) {
+    if (coreSetIsCompleteInState(targetState, day)) {
       targetState.courseCompletion[day.coreBatchId] = {
         completedAt,
         date: day.date,
@@ -1436,18 +1501,12 @@
     }
     if (!isNewDailyCompletion) return false;
 
-    const previous = targetState.stats.lastGoalDate;
-    const distance = dayDistance(previous, day.date);
-    targetState.stats.streak = !previous
-      ? 1
-      : distance === 1
-        ? targetState.stats.streak + 1
-        : Math.max(1, targetState.stats.streak);
+    targetState.stats.streak = safeInteger(targetState.stats.streak, 0, 0, 100_000) + 1;
     targetState.stats.bestStreak = Math.max(targetState.stats.bestStreak, targetState.stats.streak);
     targetState.stats.lastGoalDate = day.date;
     targetState.history.push({
       date: day.date,
-      bank: day.bank,
+      bank: safeKnownBank(day.bank, targetState.settings?.bank || "ket"),
       learned: day.practicedIds.length,
       reviewed: day.reviewDoneIds.length,
       xp: day.sessionXp
@@ -1613,8 +1672,8 @@
     return Boolean(progress?.dueAt && progress.dueAt <= now && progress.status !== "suspended");
   }
 
-  function getDueIds(now = Date.now(), bankKey = null) {
-    const allowed = bankKey ? bankWordIds(bankKey) : null;
+  function getDueIds(now = Date.now(), bankKey = null, extraAllowedIds = []) {
+    const allowed = bankKey ? new Set([...bankWordIds(bankKey), ...extraAllowedIds]) : null;
     const representatives = new Map();
     for (const id of Object.keys(state.progress)) {
       const word = getWord(id);
@@ -1634,12 +1693,16 @@
   }
 
   function coreDueIds(now = Date.now(), excluding = []) {
-    return filterDueIdsForBank(getDueIds(now, "core2000"), "core2000", excluding);
+    const savedIds = savedTrainingIds();
+    return filterDueIdsForBank(getDueIds(now, "core2000", savedIds), "core2000", excluding);
   }
 
-  function filterDueIdsForBank(dueIds, bankKey, excluding = []) {
+  function filterDueIdsForBank(dueIds, bankKey, excluding = [], source = state) {
     const excluded = new Set(excluding);
-    const allowedIds = bankWordIds(bankKey);
+    const allowedIds = new Set(bankWordIds(bankKey));
+    if (bankKey === "core2000") {
+      for (const id of savedTrainingIds(source)) allowedIds.add(id);
+    }
     return [...new Set(dueIds)].filter((id) => allowedIds.has(id) && !excluded.has(id));
   }
 
@@ -1939,11 +2002,18 @@
     rememberCompletedInitialModes();
     if (!force && state.today?.date === todayKey) {
       normalizeToday();
+      if (state.today.catalogUnavailableBank) return;
       syncDueTasks();
       return;
     }
 
     const previousDay = state.today;
+    if (!force && previousDay?.catalogUnavailableBank && !isBankAvailable(previousDay.catalogUnavailableBank)) {
+      state.today = previousDay;
+      normalizeToday();
+      saveState();
+      return;
+    }
     if (!force && previousDay?.practiceMode === "sprint" && previousDay.sprint?.phase !== "complete") {
       previousDay.date = todayKey;
       previousDay.goalAwarded = false;
@@ -2089,6 +2159,7 @@
       bank: state.settings.bank,
       goal: newIds.length,
       practiceMode: state.settings.practiceMode,
+      catalogUnavailableBank: "",
       sprint: null,
       planVersion: DAILY_PLAN_VERSION,
       plannedAt: Date.now(),
@@ -2154,7 +2225,18 @@
     for (const key of ["dueAllIds", "plannedReviewIds", "reviewBacklogIds", "newIds", "deferredNewIds", "carryoverIds", "learnedIds", "practicedIds", "dueIds", "baselineDueIds", "reviewDoneIds", "tasks"]) {
       if (!Array.isArray(state.today[key])) state.today[key] = [];
     }
-    state.today.bank = safeBank(state.today.bank, state.settings.bank);
+    const unavailableBank = safeKnownBank(state.today.catalogUnavailableBank, "");
+    if (state.today.catalogUnavailableBank && !isBankAvailable(unavailableBank)) {
+      state.today.bank = unavailableBank;
+      state.today.pausedAt ||= Date.now();
+      return;
+    }
+    if (state.today.catalogUnavailableBank && isBankAvailable(unavailableBank)) {
+      state.today.bank = unavailableBank;
+      state.today.catalogUnavailableBank = "";
+    } else {
+      state.today.bank = safeBank(state.today.bank, state.settings.bank);
+    }
     if (state.today.practiceMode === "sprint") {
       state.today.sprint = sanitizeSprintState(
         state.today.sprint,
@@ -2191,7 +2273,9 @@
     if (state.today.bank === "core2000") {
       const batch = coreBatchById(state.today.coreBatchId) || coreBatchInfo(state.settings.coreBatch);
       const courseIds = new Set(batch?.wordIds || []);
-      const allowedIds = new Set([...courseIds, ...savedTrainingIds(), ...state.today.newIds]);
+      const savedTraining = savedTrainingIds();
+      const allowedIds = new Set([...courseIds, ...savedTraining, ...state.today.newIds]);
+      const allowedReviewIds = new Set([...bankWordIds("core2000"), ...savedTraining]);
       state.today.practiceMode = "mixed";
       state.today.sprint = null;
       state.today.coreBatchId = batch?.id || null;
@@ -2209,12 +2293,12 @@
       state.today.carryoverIds = state.today.carryoverIds.filter((id) => state.today.newIds.includes(id));
       state.today.learnedIds = [...new Set(state.today.learnedIds.filter((id) => allowedIds.has(id)))];
       state.today.practicedIds = [...new Set(state.today.practicedIds.filter((id) => allowedIds.has(id)))];
-      state.today.dueIds = [...new Set(state.today.dueIds.filter((id) => bankWordIds("core2000").has(id)))];
+      state.today.dueIds = [...new Set(state.today.dueIds.filter((id) => allowedReviewIds.has(id)))];
       state.today.plannedReviewIds = [...state.today.dueIds];
-      state.today.baselineDueIds = [...new Set(state.today.baselineDueIds.filter((id) => bankWordIds("core2000").has(id)))];
+      state.today.baselineDueIds = [...new Set(state.today.baselineDueIds.filter((id) => allowedReviewIds.has(id)))];
       state.today.tasks = state.today.tasks.filter((task) => task && (
         (task.source === "new" && allowedIds.has(task.wordId))
-        || (task.source === "review" && bankWordIds("core2000").has(task.wordId))
+        || (task.source === "review" && allowedReviewIds.has(task.wordId))
       ));
       state.today.studyCursor = Math.max(0, Math.min(state.today.studyCursor, Math.max(0, state.today.newIds.length - 1)));
       return;
@@ -3043,7 +3127,9 @@
       pk: renderPk,
       settings: renderSettings
     };
-    const renderer = renderers[route] || renderHome;
+    const renderer = state.today?.catalogUnavailableBank && ["home", "learn", "practice"].includes(route)
+      ? renderUnavailableTodayPause
+      : renderers[route] || renderHome;
     root.innerHTML = renderer();
     document.body.dataset.currentRoute = route;
     updateChrome();
@@ -3211,8 +3297,15 @@
     </div>`;
   }
 
+  function renderUnavailableTodayPause(day = state.today) {
+    const bankKey = safeKnownBank(day?.catalogUnavailableBank || day?.bank, "ket");
+    const bank = BANK_META[bankKey];
+    return `<section class="view-page empty-state catalog-pause"><div><span class="empty-icon">${escapeHtml(bank.icon)}</span><p class="eyebrow" style="justify-content:center">TODAY'S SESSION IS PAUSED</p><h1>${escapeHtml(bank.short)} 词库暂时没有加载</h1><p>Kevin 尚未完成的今日任务已经暂停保存，不会被算作失败，也不会改写已有学习记录。词库恢复后刷新页面即可继续。</p><button class="btn btn-primary" type="button" data-action="reload-app">重新加载词库</button></div></section>`;
+  }
+
   function renderHome() {
     const day = state.today;
+    if (day.catalogUnavailableBank) return renderUnavailableTodayPause(day);
     if (isCoreDay(day)) return renderCoreHome();
     if (day.practiceMode === "sprint") return renderSprintHome();
     const bank = BANK_META[day.bank] || BANK_META.ket;
@@ -4630,6 +4723,9 @@
       wrongIndices,
       attempts: attempts + 1,
       completedAt: submission.completed ? at : null,
+      rewardedAt: previous.rewardedAt == null
+        ? null
+        : finiteNumber(previous.rewardedAt, null, 0, 9_999_999_999_999),
       firstAttemptAt: captureFirstAttempt ? at : (hasRecordedFirstAttempt ? previous.firstAttemptAt : null),
       firstAttemptResponses: captureFirstAttempt ? [...responses] : (hasRecordedFirstAttempt ? [...previous.firstAttemptResponses] : []),
       firstAttemptCorrectIndices: captureFirstAttempt ? [...correctIndices] : (hasRecordedFirstAttempt ? [...(previous.firstAttemptCorrectIndices || [])] : []),
@@ -4702,7 +4798,12 @@
       window.setTimeout(() => document.querySelector(`.core-exercise-answer[data-index="${wrongIndices[0]}"]`)?.focus(), 30);
       return;
     }
-    award(`core-exercise:${exerciseId}`, 25, 8, "Workbook exercise complete");
+    const completedRecord = state.coreExercises[exerciseId];
+    if (!completedRecord.rewardedAt) {
+      const rewardEventId = `core-exercise:${exerciseId}`;
+      award(rewardEventId, 25, 8, "Workbook exercise complete");
+      completedRecord.rewardedAt = state.scoreLedger.find((event) => event.id === rewardEventId)?.at || now;
+    }
     completeGoalIfReady();
     saveState();
     confetti();
@@ -5657,6 +5758,7 @@
     dayDistance,
     dailyCompletionExists,
     recordCompletionState,
+    coreSetIsCompleteInState,
     sanitizeProgress,
     sanitizeProgressItem,
     nextReviewSchedule,
@@ -5673,6 +5775,7 @@
     sprintBatchInfo,
     evaluateSprintPhase,
     sanitizeSprintState,
+    sanitizeUnavailableSprintState,
     sprintStageIsComplete,
     progressForStudyView,
     shouldSyncSprintDateBeforeAdvance,
@@ -5698,6 +5801,8 @@
     isBankAvailable,
     firstAvailableBank,
     safeBank,
+    safeKnownBank,
+    appVersion: APP_VERSION,
     bankKeys: Object.keys(BANK_META)
   };
 

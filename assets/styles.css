@@ -2278,8 +2278,9 @@ button:disabled {
 }
 
 .saved-word-source button {
-  width: 18px;
-  height: 18px;
+  width: 44px;
+  height: 44px;
+  flex: 0 0 44px;
   padding: 0;
   color: var(--ink-soft);
   border: 0;
@@ -2464,7 +2465,7 @@ button:disabled {
 }
 
 .notebook-tabs button {
-  min-height: 42px;
+  min-height: 44px;
   flex: 1;
   padding: 8px 14px;
   border: 0;

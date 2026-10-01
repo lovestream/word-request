@@ -1,0 +1,10 @@
+{
+  "name": "kevin-word-quest",
+  "private": true,
+  "scripts": {
+    "test:responsive": "playwright test tests/responsive-smoke.spec.js"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.55.0"
+  }
+}

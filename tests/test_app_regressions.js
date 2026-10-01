@@ -56,7 +56,12 @@ const temporaryPetWord = {
 const windowStub = {
   __WORD_QUEST_TEST_ONLY__: true,
   CORE2000_COURSE: {
-    batches: [{ exercise: { id: "core2000-b1-u01-a-exercise" } }],
+    batches: [{
+      id: "core2000-b1-u01-a",
+      sequence: 1,
+      wordIds: ["core2000:test", "core2000:truck"],
+      exercise: { id: "core2000-b1-u01-a-exercise" }
+    }],
     idAliases: { "core2000:old-memory": "core2000:test" }
   },
   CORE2000_EXERCISE_ANSWERS: {
@@ -184,8 +189,11 @@ assert.doesNotMatch(submitPkSource, /acceptedAnswers/, "semantic alternatives mu
 assert.match(practiceSource, /aria-label="\$\{coreEnglish \? "Book picture clue" : "单词图片提示"\}"/);
 assert.match(coreExerciseSource, /Skip this optional exercise and return to today's tasks\./, "a workbook page without answers must route back to today's plan");
 assert.match(practiceCompleteSource, /Skip optional exercise · Back to today/);
+assert.match(appSource, /TODAY'S SESSION IS PAUSED/, "a missing catalog must show an explicit paused-session message");
 const stylesSource = fs.readFileSync(path.join(__dirname, "..", "assets", "styles.css"), "utf8");
 assert.match(stylesSource, /@media \(max-width: 820px\)[\s\S]*?\.btn-small\s*\{\s*min-height:\s*44px;/, "small mobile controls must keep a 44px touch target");
+assert.match(stylesSource, /\.notebook-tabs button\s*\{[\s\S]*?min-height:\s*44px;/, "My Words tabs must keep a 44px touch target");
+assert.match(stylesSource, /\.saved-word-source button\s*\{[\s\S]*?width:\s*44px;[\s\S]*?height:\s*44px;/, "reading-source removal must have a 44px hit area");
 
 assert.deepEqual(
   Array.from(api.bankKeys),
@@ -197,6 +205,8 @@ assert.equal(api.isBankAvailable("core2000"), true);
 assert.equal(api.isBankAvailable("pet"), false, "a missing PET script must only disable PET");
 assert.equal(api.firstAvailableBank(), "core2000");
 assert.equal(api.safeBank("pet"), "core2000", "an unavailable selected bank must fall back to the first available bank");
+assert.equal(api.safeKnownBank("pet"), "pet", "historical bank labels must not depend on whether the bank script loaded today");
+assert.equal(api.appVersion, "2026.10.01");
 assert.deepEqual(JSON.parse(JSON.stringify(api.bankAvailability().pet)), { available: false, count: 0 });
 assert.equal(api.coreExerciseAvailable({ coreExerciseId: "core2000-b1-u01-a-exercise" }), true);
 const savedCoreAnswers = windowStub.CORE2000_EXERCISE_ANSWERS["core2000-b1-u01-a-exercise"];
@@ -367,6 +377,7 @@ const checkedExercise = api.sanitizeCoreExercises({
   }
 })["core2000-b1-u01-a-exercise"];
 assert.equal(checkedExercise.completedAt, 123);
+assert.equal(checkedExercise.rewardedAt, 123, "legacy completed workbook pages must migrate to a permanent rewarded marker");
 assert.equal(checkedExercise.wrongIndices.length, 0);
 assert.equal(checkedExercise.evidenceQuality, "legacy-summary", "old completed pages remain valid but do not gain invented event evidence");
 const exerciseAnswers = windowStub.CORE2000_EXERCISE_ANSWERS["core2000-b1-u01-a-exercise"];
@@ -421,6 +432,7 @@ assert.equal(legacyFollowup.firstAttemptAt, null, "a legacy record with attempts
 assert.equal(legacyFollowup.firstAttemptAnswerKeyHash, "");
 assert.equal(legacyFollowup.evidenceQuality, "legacy-summary");
 assert.equal(legacyFollowup.submissions.length, 1, "later real submissions may be retained without rewriting legacy history");
+assert.equal(legacyFollowup.rewardedAt, 123, "a workbook reward marker must survive later submissions even after the score ledger is trimmed");
 const genuineFirstAttempt = api.recordCoreExerciseSubmission({ attempts: 0 }, {
   at: 700,
   responses: exerciseAnswers,
@@ -765,6 +777,12 @@ assert.deepEqual(JSON.parse(JSON.stringify(merged.unresolvedData)), {
   recognitionEvents: [],
   recognitionPlans: {}
 }, "legacy V1/V2 records must migrate safely without unresolved catalog data");
+const unavailableHistoryBank = api.mergeState({
+  ...baseBackup,
+  history: [{ date: "2026-07-20", bank: "pet", learned: 4, reviewed: 2, xp: 30 }],
+  today: null
+}, true);
+assert.equal(unavailableHistoryBank.history[0].bank, "pet", "historical bank identity must survive temporary catalog unavailability");
 
 const frozenPlan = api.mergeState({
   ...baseBackup,
@@ -848,6 +866,11 @@ assert.deepEqual(JSON.parse(JSON.stringify(savedWordState.savedWords)), {
   }
 });
 assert.deepEqual(Array.from(api.savedTrainingIds(savedWordState)), ["ket:test"]);
+assert.deepEqual(
+  Array.from(api.filterDueIdsForBank(["ket:test", "core2000:test"], "core2000", [], savedWordState)),
+  ["ket:test", "core2000:test"],
+  "Core daily review must include due My Words cards whose train flag is true"
+);
 const multiSourceSavedWords = api.sanitizeSavedWords({
   "ket:test": {
     cardId: "ket:test",
@@ -1054,7 +1077,21 @@ const petHistoryState = api.mergeState({
       startedAt: 25
     }
   },
-  today: null
+  today: {
+    ...baseBackup.today,
+    bank: "pet",
+    goal: 1,
+    newIds: [temporaryPetWord.id],
+    learnedIds: [temporaryPetWord.id],
+    practicedIds: [],
+    dueIds: [],
+    dueAllIds: [],
+    plannedReviewIds: [],
+    baselineDueIds: [],
+    reviewBacklogIds: [],
+    tasks: [],
+    completed: false
+  }
 }, true);
 assert.ok(petHistoryState.progress[temporaryPetWord.id]);
 assert.ok(petHistoryState.savedWords[temporaryPetWord.id]);
@@ -1068,6 +1105,9 @@ assert.ok(degradedPetState.orphanProgress[temporaryPetWord.id], "missing-bank pr
 assert.equal(degradedPetState.savedWords[temporaryPetWord.id], undefined);
 assert.equal(degradedPetState.recognitionEvents.length, 0);
 assert.equal(degradedPetState.recognitionPlans["2026-09-28"], undefined);
+assert.equal(degradedPetState.today.catalogUnavailableBank, "pet", "an unfinished Today session must be explicitly paused when its bank is unavailable");
+assert.ok(degradedPetState.today.pausedAt);
+assert.deepEqual(Array.from(degradedPetState.today.newIds), [temporaryPetWord.id]);
 assert.ok(degradedPetState.unresolvedData.savedWords[temporaryPetWord.id], "missing-bank My Words data must stay quarantined");
 assert.equal(degradedPetState.unresolvedData.recognitionEvents.length, 1, "missing-bank recognition history must stay quarantined");
 assert.deepEqual(
@@ -1080,6 +1120,40 @@ assert.deepEqual(
   [],
   "an unresolved frozen plan must not participate in the current UI or be silently replaced"
 );
+const pausedPetSprint = api.sanitizeToday({
+  date: "2026-09-30",
+  bank: "pet",
+  practiceMode: "sprint",
+  completed: false,
+  sprint: {
+    sessionId: "pet:d3:paused-test",
+    day: 3,
+    scheduleKey: "pet:d3:v1",
+    wordIds: [temporaryPetWord.id],
+    phase: "drill",
+    cycle: 2,
+    awaitingStart: false,
+    mistakeIds: [temporaryPetWord.id],
+    lastScore: 0,
+    roundHistory: [{ cycle: 1, score: 0, mistakes: [temporaryPetWord.id] }]
+  },
+  newIds: [temporaryPetWord.id],
+  learnedIds: [temporaryPetWord.id],
+  practicedIds: [],
+  tasks: []
+}, {
+  ...baseBackup.settings,
+  bank: "pet",
+  practiceMode: "sprint",
+  sprintDays: { pet: 3 }
+}, {
+  [temporaryPetWord.id]: petHistoryState.progress[temporaryPetWord.id]
+}, {}, {});
+assert.equal(pausedPetSprint.catalogUnavailableBank, "pet");
+assert.equal(pausedPetSprint.sprint.day, 3, "a missing catalog must not reset the selected sprint day");
+assert.equal(pausedPetSprint.sprint.phase, "drill", "a missing catalog must not reset the active sprint phase");
+assert.deepEqual(Array.from(pausedPetSprint.sprint.wordIds), [temporaryPetWord.id]);
+assert.deepEqual(Array.from(pausedPetSprint.sprint.mistakeIds), [temporaryPetWord.id]);
 
 const savedWhilePetMissing = JSON.parse(JSON.stringify(degradedPetState));
 windowStub.WORD_BANKS.pet = [temporaryPetWord];
@@ -1089,6 +1163,8 @@ assert.ok(restoredPetState.progress[temporaryPetWord.id], "progress must return 
 assert.equal(restoredPetState.savedWords[temporaryPetWord.id].sources[0].context, "A long journey began.");
 assert.equal(restoredPetState.recognitionEvents[0].cardId, temporaryPetWord.id);
 assert.deepEqual(Array.from(restoredPetState.recognitionPlans["2026-09-28"].cardIds), [temporaryPetWord.id]);
+assert.equal(restoredPetState.today.catalogUnavailableBank, "");
+assert.deepEqual(Array.from(restoredPetState.today.newIds), [temporaryPetWord.id], "the paused Today plan must return with its bank");
 assert.equal(Object.keys(restoredPetState.unresolvedData.savedWords).length, 0);
 assert.equal(restoredPetState.unresolvedData.recognitionEvents.length, 0);
 assert.equal(Object.keys(restoredPetState.unresolvedData.recognitionPlans).length, 0);
@@ -1112,10 +1188,16 @@ assert.equal(api.shouldRejectStaleWrite(
 ), false, "the current writer may continue its own revision chain");
 
 const completionState = {
+  settings: { bank: "core2000" },
   stats: { streak: 3, bestStreak: 3, lastGoalDate: "2026-07-26" },
   scoreLedger: [],
   dailyCompletion: {},
   courseCompletion: {},
+  progress: {
+    "core2000:test": { dueAt: 100, initialModesDone: ["cloze", "full"] },
+    "core2000:truck": { dueAt: 100, initialModesDone: ["cloze", "full"] }
+  },
+  lexemeProgress: {},
   history: []
 };
 const firstSetDay = {
@@ -1133,6 +1215,20 @@ assert.equal(completionState.stats.streak, 4);
 assert.equal(completionState.history.length, 1);
 assert.ok(completionState.courseCompletion["core2000-b1-u01-a"]);
 
+const incompleteCoreSetState = {
+  ...completionState,
+  stats: { streak: 0, bestStreak: 0, lastGoalDate: null },
+  dailyCompletion: {},
+  courseCompletion: {},
+  history: [],
+  progress: {
+    "core2000:test": { dueAt: 100, initialModesDone: ["cloze", "full"] },
+    "core2000:truck": { dueAt: null, initialModesDone: ["cloze"] }
+  }
+};
+api.recordCompletionState(incompleteCoreSetState, firstSetDay, 1500, true);
+assert.equal(incompleteCoreSetState.courseCompletion["core2000-b1-u01-a"], undefined, "a partial Core day must not mark the whole set complete");
+
 const secondSetDay = {
   ...firstSetDay,
   coreBatchId: "core2000-b1-u01-b",
@@ -1143,7 +1239,7 @@ assert.equal(api.dailyCompletionExists(completionState, secondSetDay.date), true
 assert.equal(api.recordCompletionState(completionState, secondSetDay, 2000, false), false);
 assert.equal(completionState.stats.streak, 4, "a second set on the same day must not reset or increase the streak");
 assert.equal(completionState.history.length, 1, "daily goal history must have one row per completed date");
-assert.ok(completionState.courseCompletion["core2000-b1-u01-b"], "both course sets must remain recorded");
+assert.equal(completionState.courseCompletion["core2000-b1-u01-b"], undefined, "an unknown or incomplete Core set must not enter course completion");
 
 assert.equal(api.dayDistance("2026-03-07", "2026-03-10"), 3, "calendar-day distance must remain stable across daylight-saving changes");
 const returnAfterBreak = {
@@ -1158,8 +1254,8 @@ assert.equal(api.recordCompletionState(returnAfterBreak, {
   date: "2026-09-24",
   coreBatchId: "core2000-b1-u02-a"
 }, 3000, true), true);
-assert.equal(returnAfterBreak.stats.streak, 6, "returning after missed days must preserve the habit chain without granting extra days");
-assert.equal(returnAfterBreak.stats.bestStreak, 6);
+assert.equal(returnAfterBreak.stats.streak, 7, "returning after rest and completing the day must add one learning day");
+assert.equal(returnAfterBreak.stats.bestStreak, 7);
 
 assert.throws(
   () => api.mergeState({ schemaVersion: 1, settings: [], stats: [], progress: [] }, true),

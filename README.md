@@ -36,6 +36,7 @@ node tests/test_app_regressions.js
 node tests/test_sprint_mode.js
 node tests/test_learning_record_tools.js
 python3 -m unittest tests/test_launcher.py
+npm run test:responsive
 ```
 
 Source and image attribution details are recorded in [`SOURCES.md`](SOURCES.md).
