@@ -46,6 +46,7 @@ const coreTruck = {
 };
 
 const windowStub = {
+  __WORD_QUEST_TEST_ONLY__: true,
   CORE2000_COURSE: {
     batches: [{ exercise: { id: "core2000-b1-u01-a-exercise" } }],
     idAliases: { "core2000:old-memory": "core2000:test" }
@@ -178,6 +179,16 @@ assert.deepEqual(
   "only the four complete vocabulary banks should remain available"
 );
 assert.equal("junior" in windowStub.WORD_BANKS, false, "discontinued demo banks should be removed from the runtime store");
+assert.equal(api.isBankAvailable("core2000"), true);
+assert.equal(api.isBankAvailable("pet"), false, "a missing PET script must only disable PET");
+assert.equal(api.firstAvailableBank(), "core2000");
+assert.equal(api.safeBank("pet"), "core2000", "an unavailable selected bank must fall back to the first available bank");
+assert.deepEqual(JSON.parse(JSON.stringify(api.bankAvailability().pet)), { available: false, count: 0 });
+assert.equal(api.coreExerciseAvailable({ coreExerciseId: "core2000-b1-u01-a-exercise" }), true);
+const savedCoreAnswers = windowStub.CORE2000_EXERCISE_ANSWERS["core2000-b1-u01-a-exercise"];
+delete windowStub.CORE2000_EXERCISE_ANSWERS["core2000-b1-u01-a-exercise"];
+assert.equal(api.coreExerciseAvailable({ coreExerciseId: "core2000-b1-u01-a-exercise" }), false, "a missing answer key must only disable the optional workbook check");
+windowStub.CORE2000_EXERCISE_ANSWERS["core2000-b1-u01-a-exercise"] = savedCoreAnswers;
 assert.equal(api.shouldIgnoreGlobalEnter({ tagName: "INPUT" }), true);
 assert.equal(api.shouldIgnoreGlobalEnter({ tagName: "BUTTON" }), true);
 assert.equal(api.shouldIgnoreGlobalEnter({ tagName: "MAIN" }), false);

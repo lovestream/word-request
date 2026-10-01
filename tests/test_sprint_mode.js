@@ -52,6 +52,7 @@ const stubElement = {
 };
 
 const windowStub = {
+  __WORD_QUEST_TEST_ONLY__: true,
   WORD_BANKS: {
     movers: moversWords,
     ket: ketWords,

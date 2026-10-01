@@ -2044,6 +2044,25 @@ button:disabled {
   box-shadow: 6px 7px 0 rgba(23, 63, 58, 0.14);
 }
 
+.book-card.is-unavailable {
+  filter: grayscale(0.65);
+  opacity: 0.66;
+}
+
+.book-card.is-unavailable::after {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  padding: 5px 8px;
+  color: var(--ink-soft);
+  border-radius: 999px;
+  background: rgba(23, 63, 58, 0.08);
+  content: "OFFLINE";
+  font-size: 9px;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+}
+
 .book-card::after {
   position: absolute;
   right: -32px;

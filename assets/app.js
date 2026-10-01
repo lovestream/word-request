@@ -140,7 +140,7 @@
       lastImport: null,
       profile: { name: "Kevin", avatar: "🦊" },
       settings: {
-        bank: "ket",
+        bank: safeBank("ket"),
         dailyGoal: 10,
         coreBatch: 1,
         practiceMode: "mixed",
@@ -225,7 +225,25 @@
   }
 
   function safeBank(value, fallback = "ket") {
-    return typeof value === "string" && Object.prototype.hasOwnProperty.call(BANK_META, value) && Array.isArray(window.WORD_BANKS?.[value]) ? value : fallback;
+    if (typeof value === "string" && isBankAvailable(value)) return value;
+    if (typeof value === "string" && Object.prototype.hasOwnProperty.call(BANK_META, value)) return firstAvailableBank() || "core2000";
+    if (typeof fallback === "string" && isBankAvailable(fallback)) return fallback;
+    return firstAvailableBank() || "core2000";
+  }
+
+  function bankAvailability() {
+    return Object.fromEntries(Object.keys(BANK_META).map((bankKey) => [bankKey, {
+      available: Array.isArray(window.WORD_BANKS?.[bankKey]),
+      count: Array.isArray(window.WORD_BANKS?.[bankKey]) ? window.WORD_BANKS[bankKey].length : 0
+    }]));
+  }
+
+  function isBankAvailable(bankKey) {
+    return Boolean(bankAvailability()[bankKey]?.available);
+  }
+
+  function firstAvailableBank() {
+    return Object.keys(BANK_META).find((bankKey) => isBankAvailable(bankKey)) || null;
   }
 
   function coreCourse() {
@@ -269,6 +287,10 @@
 
   function coreExerciseIsComplete(day = state?.today) {
     return Boolean(day?.coreExerciseId && coreExerciseRecord(day.coreExerciseId)?.completedAt);
+  }
+
+  function coreExerciseAvailable(day = state?.today) {
+    return Boolean(day?.coreExerciseId && coreExerciseAnswers(day.coreExerciseId).length);
   }
 
   function coreBatchReadyForExercise(day = state?.today) {
@@ -3079,7 +3101,8 @@
     const learned = day.learnedIds.length;
     const practiced = day.practicedIds.length;
     const exerciseDone = coreExerciseIsComplete(day);
-    const exerciseAvailable = coreBatchReadyForExercise(day);
+    const exerciseReady = coreBatchReadyForExercise(day);
+    const exerciseAvailable = exerciseReady && coreExerciseAvailable(day);
     const total = day.newIds.length;
     const spellingTasks = day.tasks.filter((task) => task.source === "new");
     const spellingDone = spellingTasks.filter((task) => task.status === "done").length;
@@ -3110,7 +3133,7 @@
           <li class="${plan.reviewRemaining ? "is-active" : "is-done"}"><span>1</span><strong>Memory Review</strong><small>${plan.plannedReviews ? `${plan.reviewDone}/${plan.plannedReviews} planned words` : "All clear today"}</small></li>
           <li class="${total === 0 || learned >= total ? "is-done" : !plan.reviewRemaining ? "is-active" : "is-locked"}"><span>2</span><strong>Picture Study</strong><small>${total ? `${learned}/${total} words today` : "0 new words today"}</small></li>
           <li class="${newComplete ? "is-done" : learned >= total && !plan.reviewRemaining ? "is-active" : "is-locked"}"><span>3</span><strong>Spelling</strong><small>${total ? `${spellingDone}/${Math.max(total * 2, spellingTasks.length)} rounds` : "No new rounds"}</small></li>
-          <li class="${exerciseDone ? "is-done" : exerciseAvailable ? "is-active" : "is-locked"}"><span>4</span><strong>Book Exercise</strong><small>${exerciseDone ? "Complete" : exerciseAvailable ? "Available · not required today" : `${day.deferredNewIds.length} set words remain`}</small></li>
+          <li class="${exerciseDone ? "is-done" : exerciseAvailable ? "is-active" : "is-locked"}"><span>4</span><strong>Book Exercise</strong><small>${exerciseDone ? "Complete" : exerciseAvailable ? "Available · not required today" : exerciseReady ? "Answer key unavailable · safely skipped" : `${day.deferredNewIds.length} set words remain`}</small></li>
         </ol></section>
       </section>`;
   }
@@ -3415,7 +3438,7 @@
       if (sprint.awaitingStart) return renderSprintCheckpoint();
     }
     const task = currentTask();
-    if (coreEnglish && !task && coreBatchReadyForExercise() && !coreExerciseIsComplete()) {
+    if (coreEnglish && !task && coreBatchReadyForExercise() && coreExerciseAvailable() && !coreExerciseIsComplete()) {
       return renderCoreExercise();
     }
     if (!task) {
@@ -3559,13 +3582,16 @@
       const batch = coreBatchById(day.coreBatchId) || coreBatchInfo();
       const plan = dailyPlanMetrics(day);
       const setReady = coreBatchReadyForExercise(day);
+      const exerciseAvailable = coreExerciseAvailable(day);
       const exerciseDone = coreExerciseIsComplete(day);
       const nextAction = exerciseDone
         ? `<button class="btn btn-primary" type="button" data-action="start-next-core-set">Start Set ${Math.min(128, (batch?.sequence || 1) + 1)} →</button>`
-        : setReady
+        : setReady && exerciseAvailable
           ? `<button class="btn btn-primary" type="button" data-route="practice">Open optional book exercise →</button>`
+          : setReady
+            ? `<button class="btn btn-primary" type="button" data-action="start-next-core-set">Continue to Set ${Math.min(128, (batch?.sequence || 1) + 1)} →</button>`
           : `<button class="btn btn-primary" type="button" data-route="home">Back to today's plan</button>`;
-      return `<section class="view-page round-complete"><div><div class="result-medal">📘</div><p class="eyebrow" style="justify-content:center">TODAY'S CORE PLAN COMPLETE</p><h1 class="result-title">A balanced day of learning is complete!</h1><p class="result-subtitle">Kevin finished the frozen daily plan. ${day.deferredNewIds.length ? `${day.deferredNewIds.length} remaining set word${day.deferredNewIds.length === 1 ? " stays" : "s stay"} safely queued for another day.` : setReady ? "All ten set words are learned; the workbook page is now available." : "The next plan will continue from this set."}</p><div class="result-stats"><span class="result-stat"><strong>${day.newIds.length}</strong><small>NEW WORDS</small></span><span class="result-stat"><strong>${plan.reviewDone}</strong><small>MEMORY REVIEWS</small></span><span class="result-stat"><strong>${plan.backlog}</strong><small>SAFE BACKLOG</small></span></div><div class="button-row" style="justify-content:center">${nextAction}<button class="btn btn-soft" type="button" data-route="books">Choose a different set</button></div></div></section>`;
+      return `<section class="view-page round-complete"><div><div class="result-medal">📘</div><p class="eyebrow" style="justify-content:center">TODAY'S CORE PLAN COMPLETE</p><h1 class="result-title">A balanced day of learning is complete!</h1><p class="result-subtitle">Kevin finished the frozen daily plan. ${day.deferredNewIds.length ? `${day.deferredNewIds.length} remaining set word${day.deferredNewIds.length === 1 ? " stays" : "s stay"} safely queued for another day.` : setReady && exerciseAvailable ? "All ten set words are learned; the workbook page is now available." : setReady ? "All ten set words are learned. This copy has no answer key, so the optional workbook page is skipped." : "The next plan will continue from this set."}</p><div class="result-stats"><span class="result-stat"><strong>${day.newIds.length}</strong><small>NEW WORDS</small></span><span class="result-stat"><strong>${plan.reviewDone}</strong><small>MEMORY REVIEWS</small></span><span class="result-stat"><strong>${plan.backlog}</strong><small>SAFE BACKLOG</small></span></div><div class="button-row" style="justify-content:center">${nextAction}<button class="btn btn-soft" type="button" data-route="books">Choose a different set</button></div></div></section>`;
     }
     const dueAt = Object.values(state.progress)
       .map((progress) => progress.dueAt)
@@ -3609,6 +3635,7 @@
     const cards = Object.entries(BANK_META)
       .map(([key, meta]) => {
         const displayMeta = englishLibrary ? BANK_ENGLISH[key] || { name: meta.short, description: "Offline English vocabulary collection" } : meta;
+        const available = isBankAvailable(key);
         const words = window.WORD_BANKS[key] || [];
         const learned = learnedInBank(key);
         const percent = words.length ? Math.round((learned / words.length) * 100) : 0;
@@ -3616,11 +3643,11 @@
         const matches = !query || `${key} ${meta.name} ${meta.short} ${meta.description}`.toLowerCase().includes(query);
         if (matches) visibleCards += 1;
         return `
-          <button class="book-card ${selected ? "is-selected" : ""}" type="button" data-action="select-bank" data-bank="${key}" style="--book-color:${meta.color}" ${matches ? "" : "hidden"}>
+          <button class="book-card ${selected ? "is-selected" : ""} ${available ? "" : "is-unavailable"}" type="button" data-action="select-bank" data-bank="${key}" style="--book-color:${meta.color}" ${matches ? "" : "hidden"} ${available ? "" : "disabled"}>
             ${selected ? `<span class="selected-sticker">${englishLibrary ? "CURRENT COURSE" : "正在学习"}</span>` : ""}
             <span class="book-icon">${escapeHtml(meta.icon)}</span>
             <h2>${escapeHtml(displayMeta.name)}</h2>
-            <p>${escapeHtml(displayMeta.description)}${!englishLibrary && ["ket", "pet"].includes(key) && words.some((word) => word.official) ? " · Cambridge 2025 官方表" : ""}${!englishLibrary && key === "movers" && words.some((word) => word.visual?.image) ? " · 全部离线可用" : ""}</p>
+            <p>${available ? `${escapeHtml(displayMeta.description)}${!englishLibrary && ["ket", "pet"].includes(key) && words.some((word) => word.official) ? " · Cambridge 2025 官方表" : ""}${!englishLibrary && key === "movers" && words.some((word) => word.visual?.image) ? " · 全部离线可用" : ""}` : "暂时不可用 · 数据文件未加载"}</p>
             <span class="book-meta"><span>${learned} / ${words.length} ${englishLibrary ? "learned" : "已学习"}</span><span class="book-progress"><span style="width:${percent}%"></span></span><span>${percent}%</span></span>
           </button>`;
       }).join("");
@@ -4372,7 +4399,7 @@
   }
 
   function chooseBank(bankKey) {
-    if (!BANK_META[bankKey] || !window.WORD_BANKS[bankKey]) return;
+    if (!BANK_META[bankKey] || !isBankAvailable(bankKey)) return;
     if (state.settings.bank === bankKey) {
       toast(`已经在学习 ${BANK_META[bankKey].name}`, BANK_META[bankKey].icon);
       return;
@@ -5374,6 +5401,7 @@
     coreExerciseAnswerMatches,
     coreAnswerKeyHash,
     coreExerciseEvidenceMetrics,
+    coreExerciseAvailable,
     damerauDistanceOne,
     makeMask,
     canEnterPracticeAnswer,
@@ -5417,13 +5445,24 @@
     taskCountsAsCleanInitial,
     resetTaskForMasteryRetry,
     sanitizeCoreExercises,
+    bankAvailability,
+    isBankAvailable,
+    firstAvailableBank,
+    safeBank,
     bankKeys: Object.keys(BANK_META)
   };
 
-  const missingBanks = Object.keys(BANK_META).filter((key) => !Array.isArray(window.WORD_BANKS?.[key]));
-  if (!window.WORD_BANKS || !Object.keys(window.WORD_BANKS).length || missingBanks.length) {
-    root.innerHTML = `<section class="view-page empty-state"><div><span class="empty-icon">⚠️</span><h1>词库没有加载成功</h1><p>请确认 assets/words.js、assets/cambridge-official.js、assets/movers-2025.js、assets/core2000.js、assets/core2000-answers.js 和图片文件夹都在网站目录中。</p><button class="btn btn-primary" type="button" data-action="reload-app">重新加载</button></div></section>`;
+  if (window.__WORD_QUEST_TEST_ONLY__) return;
+  const availability = bankAvailability();
+  if (!firstAvailableBank()) {
+    root.innerHTML = `<section class="view-page empty-state"><div><span class="empty-icon">⚠️</span><h1>词库没有加载成功</h1><p>四个词库数据文件都没有加载。请检查网站目录中的 assets 文件。</p><button class="btn btn-primary" type="button" data-action="reload-app">重新加载</button></div></section>`;
     return;
+  }
+  let requestedStoredBank = "";
+  try {
+    requestedStoredBank = JSON.parse(localStorage.getItem(STATE_KEY) || "null")?.settings?.bank || "";
+  } catch (error) {
+    requestedStoredBank = "";
   }
   state = loadState();
   invalidateCustomCatalog();
@@ -5432,4 +5471,7 @@
   route = ["home", "learn", "practice", "review", "books", "notebook", "parent", "checkup", "pk", "settings"].includes(requestedRoute) ? requestedRoute : "home";
   if (!window.location.hash) window.history.replaceState(null, "", "#home");
   render();
+  if (requestedStoredBank && !availability[requestedStoredBank]?.available) {
+    toast(`${BANK_META[requestedStoredBank]?.short || "原词库"} 暂时不可用，已切换到 ${BANK_META[state.settings.bank]?.short || state.settings.bank}`, "⚠️");
+  }
 })();
