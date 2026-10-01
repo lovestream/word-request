@@ -4548,6 +4548,10 @@ button:disabled {
 }
 
 @media (max-width: 820px) {
+  .btn-small {
+    min-height: 44px;
+  }
+
   .app-shell {
     display: block;
     padding-bottom: 79px;

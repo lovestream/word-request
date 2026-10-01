@@ -176,6 +176,7 @@
       scoreLedger: [],
       attemptEvents: [],
       recognitionEvents: [],
+      recognitionPlans: {},
       attemptSequence: 0,
       customWords: {},
       savedWords: {},
@@ -615,6 +616,7 @@
       const sanitizeIndices = (values) => [...new Set((Array.isArray(values) ? values : [])
         .map((index) => safeInteger(index, -1, -1, answerCount - 1))
         .filter((index) => index >= 0 && index < answerCount))].sort((a, b) => a - b);
+      const attempts = safeInteger(item.attempts, 0, 0, 1000);
       const hasFirstAttemptEvidence = item.evidenceQuality === "event-log" && item.firstAttemptAt != null && Array.isArray(item.firstAttemptResponses);
       const submissions = (Array.isArray(item.submissions) ? item.submissions : []).slice(-20).map((submission) => {
         if (!submission || typeof submission !== "object" || Array.isArray(submission)) return null;
@@ -632,7 +634,7 @@
         responses: Array.from({ length: answerCount }, (_, index) => safeText(item.responses?.[index], "", 120)),
         correctIndices,
         wrongIndices,
-        attempts: safeInteger(item.attempts, 0, 0, 1000),
+        attempts,
         completedAt: correctIndices.length === answerCount && item.completedAt != null
           ? finiteNumber(item.completedAt, null, 0, 9_999_999_999_999)
           : null,
@@ -640,8 +642,9 @@
         firstAttemptResponses: hasFirstAttemptEvidence ? Array.from({ length: answerCount }, (_, index) => safeText(item.firstAttemptResponses?.[index], "", 120)) : [],
         firstAttemptCorrectIndices: hasFirstAttemptEvidence ? sanitizeIndices(item.firstAttemptCorrectIndices) : [],
         firstAttemptWrongIndices: hasFirstAttemptEvidence ? sanitizeIndices(item.firstAttemptWrongIndices) : [],
-        submissions: hasFirstAttemptEvidence ? submissions : [],
-        answerKeyHash: hasFirstAttemptEvidence ? safeText(item.answerKeyHash, "", 80) : "",
+        firstAttemptAnswerKeyHash: hasFirstAttemptEvidence ? safeText(item.firstAttemptAnswerKeyHash, "", 80) : "",
+        submissions,
+        answerKeyHash: safeText(item.answerKeyHash, "", 80),
         evidenceQuality: hasFirstAttemptEvidence ? "event-log" : "legacy-summary"
       };
     }
@@ -905,6 +908,38 @@
     return "";
   }
 
+  function sanitizeReadingSources(rawSources, fallbackAt = Date.now(), fallbackSource = null) {
+    const addedAt = finiteNumber(fallbackAt, Date.now(), 0, 9_999_999_999_999);
+    const sourceRows = Array.isArray(rawSources) && rawSources.length
+      ? rawSources
+      : fallbackSource && typeof fallbackSource === "object" && !Array.isArray(fallbackSource)
+        ? [fallbackSource]
+        : [];
+    const sources = [];
+    const sourceKeys = new Set();
+    for (const source of sourceRows) {
+      if (!source || typeof source !== "object" || Array.isArray(source)) continue;
+      const sourceTag = safeText(source.sourceTag, "Reading", 80).trim() || "Reading";
+      const context = safeText(source.context, "", 320).trim();
+      const key = `${normalizeAnswer(sourceTag)}\n${normalizeAnswer(context)}`;
+      if (sourceKeys.has(key)) continue;
+      sourceKeys.add(key);
+      sources.push({
+        sourceTag,
+        context,
+        addedAt: finiteNumber(source.addedAt, addedAt, 0, 9_999_999_999_999)
+      });
+    }
+    return sources;
+  }
+
+  function mergeReadingSources(existingSources, additions, fallbackAt = Date.now()) {
+    return sanitizeReadingSources([
+      ...(Array.isArray(existingSources) ? existingSources : []),
+      ...(Array.isArray(additions) ? additions : [])
+    ], fallbackAt);
+  }
+
   function sanitizeCustomWordDraft(raw, existingId = "") {
     if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
     const word = safeText(raw.word, "", 80).trim().replace(/\s+/g, " ");
@@ -952,6 +987,17 @@
       ipa: "",
       custom: true,
       archived: Boolean(raw.archived),
+      archivedSavedEntry: raw.archivedSavedEntry && typeof raw.archivedSavedEntry === "object" && !Array.isArray(raw.archivedSavedEntry)
+        ? {
+            train: Boolean(raw.archivedSavedEntry.train),
+            addedAt: finiteNumber(raw.archivedSavedEntry.addedAt, raw.createdAt || Date.now(), 0, 9_999_999_999_999),
+            sources: sanitizeReadingSources(
+              raw.archivedSavedEntry.sources,
+              raw.archivedSavedEntry.addedAt || raw.createdAt || Date.now(),
+              { sourceTag: raw.sourceTag, context: raw.context, addedAt: raw.archivedSavedEntry.addedAt || raw.createdAt }
+            )
+          }
+        : null,
       createdAt: finiteNumber(raw.createdAt, Date.now(), 0, 9_999_999_999_999),
       updatedAt: finiteNumber(raw.updatedAt, Date.now(), 0, 9_999_999_999_999)
     };
@@ -977,24 +1023,11 @@
       const cardId = canonicalWordId(safeText(item.cardId || rawId, "", 220));
       if (!getWord(cardId)) continue;
       const legacyAddedAt = finiteNumber(item.addedAt, Date.now(), 0, 9_999_999_999_999);
-      const sourceRows = Array.isArray(item.sources) && item.sources.length
-        ? item.sources
-        : [{ sourceTag: item.sourceTag, context: item.context, addedAt: legacyAddedAt }];
-      const sources = [];
-      const sourceKeys = new Set();
-      for (const source of sourceRows) {
-        if (!source || typeof source !== "object" || Array.isArray(source)) continue;
-        const sourceTag = safeText(source.sourceTag, "Reading", 80).trim() || "Reading";
-        const context = safeText(source.context, "", 320).trim();
-        const key = `${normalizeAnswer(sourceTag)}\n${normalizeAnswer(context)}`;
-        if (sourceKeys.has(key)) continue;
-        sourceKeys.add(key);
-        sources.push({
-          sourceTag,
-          context,
-          addedAt: finiteNumber(source.addedAt, legacyAddedAt, 0, 9_999_999_999_999)
-        });
-      }
+      const sources = sanitizeReadingSources(
+        item.sources,
+        legacyAddedAt,
+        { sourceTag: item.sourceTag, context: item.context, addedAt: legacyAddedAt }
+      );
       result[cardId] = {
         cardId,
         train: Boolean(item.train),
@@ -1074,6 +1107,30 @@
       });
     }
     return [...unique.values()].sort((left, right) => left.occurredAt - right.occurredAt || left.eventId.localeCompare(right.eventId));
+  }
+
+  function sanitizeRecognitionPlans(raw) {
+    const result = {};
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return result;
+    const rows = Object.entries(raw).filter(([weekKey]) => safeDateKey(weekKey)).slice(-60);
+    for (const [weekKey, item] of rows) {
+      if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+      const seenLexemes = new Set();
+      const cardIds = safeWordIds(item.cardIds).filter((cardId) => {
+        const word = getWord(cardId);
+        const lexemeId = lexemeIdForWord(word);
+        if (!word || word.archived || !lexemeId || seenLexemes.has(lexemeId)) return false;
+        seenLexemes.add(lexemeId);
+        return true;
+      }).slice(0, 5);
+      if (!cardIds.length) continue;
+      result[weekKey] = {
+        weekKey,
+        cardIds,
+        startedAt: finiteNumber(item.startedAt, Date.now(), 0, 9_999_999_999_999)
+      };
+    }
+    return result;
   }
 
   function mergeState(raw, strict = false) {
@@ -1189,6 +1246,7 @@
       scoreLedger,
       attemptEvents,
       recognitionEvents,
+      recognitionPlans: sanitizeRecognitionPlans(raw.recognitionPlans),
       attemptSequence: Math.max(
         safeInteger(raw.attemptSequence, 0, 0, 1_000_000_000),
         maxDeviceAttemptSequence
@@ -1690,7 +1748,7 @@
     const correctCount = records.reduce((sum, [, record]) => sum + (record.firstAttemptCorrectIndices || []).length, 0);
     const changedAnswerKeys = records.filter(([exerciseId, record]) => {
       const currentHash = coreAnswerKeyHash(coreExerciseAnswers(exerciseId));
-      return Boolean(record.answerKeyHash && currentHash && record.answerKeyHash !== currentHash);
+      return Boolean(record.firstAttemptAnswerKeyHash && currentHash && record.firstAttemptAnswerKeyHash !== currentHash);
     }).length;
     return {
       pages: records.length,
@@ -1701,7 +1759,7 @@
     };
   }
 
-  function weeklyCheckPlan(source = state, date = new Date()) {
+  function weeklyCheckCandidates(source = state, date = new Date()) {
     const excluded = new Set(source?.today?.newIds || []);
     const seenLexemes = new Set();
     const eligible = Object.keys(source?.progress || {}).filter((cardId) => {
@@ -1714,6 +1772,36 @@
       return true;
     });
     return seededShuffle(eligible, `weekly-check:${localWeekKey(date)}`).slice(0, 5);
+  }
+
+  function weeklyCheckPlan(source = state, date = new Date()) {
+    const weekKey = localWeekKey(date);
+    const frozen = source?.recognitionPlans?.[weekKey]?.cardIds;
+    if (Array.isArray(frozen) && frozen.length) return safeWordIds(frozen).slice(0, 5);
+    return weeklyCheckCandidates(source, date);
+  }
+
+  function ensureWeeklyCheckPlan(source = state, date = new Date(), startedAt = Date.now()) {
+    const weekKey = localWeekKey(date);
+    source.recognitionPlans ||= {};
+    const existing = source.recognitionPlans[weekKey];
+    if (Array.isArray(existing?.cardIds) && existing.cardIds.length) return safeWordIds(existing.cardIds).slice(0, 5);
+    const seenLexemes = new Set();
+    const carriedEventIds = (source.recognitionEvents || [])
+      .filter((event) => event?.weekKey === weekKey)
+      .sort((left, right) => (left.occurredAt || 0) - (right.occurredAt || 0))
+      .map((event) => canonicalWordId(event.cardId));
+    const cardIds = [...carriedEventIds, ...weeklyCheckCandidates(source, date)].filter((cardId) => {
+      const word = getWord(cardId);
+      const lexemeId = lexemeIdForWord(word);
+      if (!word || word.archived || !lexemeId || seenLexemes.has(lexemeId)) return false;
+      seenLexemes.add(lexemeId);
+      return true;
+    }).slice(0, 5);
+    if (cardIds.length) {
+      source.recognitionPlans[weekKey] = { weekKey, cardIds: [...cardIds], startedAt };
+    }
+    return cardIds;
   }
 
   function weeklyCheckOptions(cardId, plannedIds, weekKey) {
@@ -3550,9 +3638,9 @@
     const day = state.today;
     const batch = coreBatchById(day.coreBatchId) || coreBatchInfo();
     const exercise = batch?.exercise;
-    if (!exercise) return renderEmpty("▤", "Exercise page unavailable", "Choose another set and try again.", "books", "Choose a set");
+    if (!exercise) return renderEmpty("▤", "Optional exercise unavailable", "Skip this optional exercise and return to today's tasks.", "home", "Back to today's plan");
     const answers = coreExerciseAnswers(exercise.id);
-    if (!answers.length) return renderEmpty("▤", "Answer key unavailable", "This workbook page cannot be checked yet. Choose another set and try again.", "books", "Choose a set");
+    if (!answers.length) return renderEmpty("▤", "Answer key unavailable", "Skip this optional exercise and return to today's tasks.", "home", "Back to today's plan");
     const answerCount = answers.length;
     const record = coreExerciseRecord(exercise.id) || { responses: Array(answerCount).fill(""), correctIndices: [], wrongIndices: [], attempts: 0, completedAt: null };
     const currentAnswerKeyHash = coreAnswerKeyHash(answers);
@@ -3603,9 +3691,12 @@
         : setReady && exerciseAvailable
           ? `<button class="btn btn-primary" type="button" data-route="practice">Open optional book exercise →</button>`
           : setReady
-            ? `<button class="btn btn-primary" type="button" data-action="start-next-core-set">Continue to Set ${Math.min(128, (batch?.sequence || 1) + 1)} →</button>`
+            ? `<button class="btn btn-primary" type="button" data-route="home">Skip optional exercise · Back to today</button>`
           : `<button class="btn btn-primary" type="button" data-route="home">Back to today's plan</button>`;
-      return `<section class="view-page round-complete"><div><div class="result-medal">📘</div><p class="eyebrow" style="justify-content:center">TODAY'S CORE PLAN COMPLETE</p><h1 class="result-title">A balanced day of learning is complete!</h1><p class="result-subtitle">Kevin finished the frozen daily plan. ${day.deferredNewIds.length ? `${day.deferredNewIds.length} remaining set word${day.deferredNewIds.length === 1 ? " stays" : "s stay"} safely queued for another day.` : setReady && exerciseAvailable ? "All ten set words are learned; the workbook page is now available." : setReady ? "All ten set words are learned. This copy has no answer key, so the optional workbook page is skipped." : "The next plan will continue from this set."}</p><div class="result-stats"><span class="result-stat"><strong>${day.newIds.length}</strong><small>NEW WORDS</small></span><span class="result-stat"><strong>${plan.reviewDone}</strong><small>MEMORY REVIEWS</small></span><span class="result-stat"><strong>${plan.backlog}</strong><small>SAFE BACKLOG</small></span></div><div class="button-row" style="justify-content:center">${nextAction}<button class="btn btn-soft" type="button" data-route="books">Choose a different set</button></div></div></section>`;
+      const secondaryAction = setReady && !exerciseAvailable
+        ? ""
+        : `<button class="btn btn-soft" type="button" data-route="books">Choose a different set</button>`;
+      return `<section class="view-page round-complete"><div><div class="result-medal">📘</div><p class="eyebrow" style="justify-content:center">TODAY'S CORE PLAN COMPLETE</p><h1 class="result-title">A balanced day of learning is complete!</h1><p class="result-subtitle">Kevin finished the frozen daily plan. ${day.deferredNewIds.length ? `${day.deferredNewIds.length} remaining set word${day.deferredNewIds.length === 1 ? " stays" : "s stay"} safely queued for another day.` : setReady && exerciseAvailable ? "All ten set words are learned; the workbook page is now available." : setReady ? "All ten set words are learned. This copy has no answer key, so the optional workbook page is skipped." : "The next plan will continue from this set."}</p><div class="result-stats"><span class="result-stat"><strong>${day.newIds.length}</strong><small>NEW WORDS</small></span><span class="result-stat"><strong>${plan.reviewDone}</strong><small>MEMORY REVIEWS</small></span><span class="result-stat"><strong>${plan.backlog}</strong><small>SAFE BACKLOG</small></span></div><div class="button-row" style="justify-content:center">${nextAction}${secondaryAction}</div></div></section>`;
     }
     const dueAt = Object.values(state.progress)
       .map((progress) => progress.dueAt)
@@ -3745,7 +3836,7 @@
   }
 
   function renderArchivedCustomWord(word) {
-    return `<article class="archived-word-row"><div><strong>${escapeHtml(word.word)}</strong><span>${escapeHtml(word.sourceTag)} · ${escapeHtml(word.en)}</span></div><button class="btn btn-small btn-soft" type="button" data-action="restore-custom-word" data-card-id="${escapeHtml(word.id)}">恢复为只收藏</button></article>`;
+    return `<article class="archived-word-row"><div><strong>${escapeHtml(word.word)}</strong><span>${escapeHtml(word.sourceTag)} · ${escapeHtml(word.en)}</span></div><button class="btn btn-small btn-soft" type="button" data-action="restore-custom-word" data-card-id="${escapeHtml(word.id)}">恢复到 My Words</button></article>`;
   }
 
   function renderNotebook() {
@@ -3858,7 +3949,9 @@
 
   function renderWeeklyCheckup() {
     const weekKey = localWeekKey();
-    const plannedIds = weeklyCheckPlan();
+    const hadFrozenPlan = Boolean(state.recognitionPlans?.[weekKey]?.cardIds?.length);
+    const plannedIds = ensureWeeklyCheckPlan();
+    if (!hadFrozenPlan && plannedIds.length) saveState();
     if (!plannedIds.length) {
       return renderEmpty("🔎", "还没有适合独立抽检的旧词", "完成一些新词学习后，这里会每周抽取最多 5 个非当天词。", "home", "返回今日任务");
     }
@@ -3888,7 +3981,7 @@
 
   function answerWeeklyCheck(cardId, selectedCardId) {
     const weekKey = localWeekKey();
-    const plannedIds = weeklyCheckPlan();
+    const plannedIds = ensureWeeklyCheckPlan();
     const canonicalCardId = canonicalWordId(cardId);
     const canonicalSelectedId = canonicalWordId(selectedCardId);
     if (!plannedIds.includes(canonicalCardId) || !getWord(canonicalSelectedId)) return;
@@ -4449,12 +4542,52 @@
     render();
   }
 
+  function recordCoreExerciseSubmission(previous = {}, submission = {}) {
+    const attempts = safeInteger(previous.attempts, 0, 0, 999);
+    const hasRecordedFirstAttempt = previous.evidenceQuality === "event-log"
+      && previous.firstAttemptAt != null
+      && Array.isArray(previous.firstAttemptResponses);
+    const captureFirstAttempt = attempts === 0
+      && previous.firstAttemptAt == null
+      && previous.evidenceQuality !== "legacy-summary";
+    const at = finiteNumber(submission.at, Date.now(), 0, 9_999_999_999_999);
+    const responses = [...(submission.responses || [])];
+    const correctIndices = [...(submission.correctIndices || [])];
+    const wrongIndices = [...(submission.wrongIndices || [])];
+    const answerKeyHash = safeText(submission.answerKeyHash, "", 80);
+    const submissions = [...(previous.submissions || []), {
+      at,
+      responses: [...responses],
+      correctIndices: [...correctIndices],
+      wrongIndices: [...wrongIndices],
+      answerKeyHash
+    }].slice(-20);
+    return {
+      responses,
+      correctIndices,
+      wrongIndices,
+      attempts: attempts + 1,
+      completedAt: submission.completed ? at : null,
+      firstAttemptAt: captureFirstAttempt ? at : (hasRecordedFirstAttempt ? previous.firstAttemptAt : null),
+      firstAttemptResponses: captureFirstAttempt ? [...responses] : (hasRecordedFirstAttempt ? [...previous.firstAttemptResponses] : []),
+      firstAttemptCorrectIndices: captureFirstAttempt ? [...correctIndices] : (hasRecordedFirstAttempt ? [...(previous.firstAttemptCorrectIndices || [])] : []),
+      firstAttemptWrongIndices: captureFirstAttempt ? [...wrongIndices] : (hasRecordedFirstAttempt ? [...(previous.firstAttemptWrongIndices || [])] : []),
+      firstAttemptAnswerKeyHash: captureFirstAttempt
+        ? answerKeyHash
+        : (hasRecordedFirstAttempt ? safeText(previous.firstAttemptAnswerKeyHash, "", 80) : ""),
+      submissions,
+      answerKeyHash,
+      evidenceQuality: captureFirstAttempt || hasRecordedFirstAttempt ? "event-log" : "legacy-summary"
+    };
+  }
+
   function completeCoreExercise() {
     if (!isCoreDay() || !state.today.coreExerciseId) return;
     const exerciseId = state.today.coreExerciseId;
     const answers = coreExerciseAnswers(exerciseId);
     if (!answers.length) {
-      toast("This page does not have an answer key yet.", "⚠️");
+      toast("This optional exercise has no answer key. Returning to today's plan.", "⚠️");
+      navigate("home");
       return;
     }
     const answerCount = answers.length;
@@ -4480,28 +4613,14 @@
     const completed = wrongIndices.length === 0;
     const now = Date.now();
     const answerKeyHash = coreAnswerKeyHash(answers);
-    const firstSubmission = !previous.firstAttemptAt;
-    const submissions = [...(previous.submissions || []), {
-      at: now,
-      responses: [...responses],
-      correctIndices: [...correctIndices],
-      wrongIndices: [...wrongIndices],
-      answerKeyHash
-    }].slice(-20);
-    state.coreExercises[exerciseId] = {
+    state.coreExercises[exerciseId] = recordCoreExerciseSubmission(previous, {
       responses,
       correctIndices,
       wrongIndices,
-      attempts: safeInteger(previous.attempts, 0, 0, 999) + 1,
-      completedAt: completed ? now : null,
-      firstAttemptAt: firstSubmission ? now : previous.firstAttemptAt,
-      firstAttemptResponses: firstSubmission ? [...responses] : [...(previous.firstAttemptResponses || [])],
-      firstAttemptCorrectIndices: firstSubmission ? [...correctIndices] : [...(previous.firstAttemptCorrectIndices || [])],
-      firstAttemptWrongIndices: firstSubmission ? [...wrongIndices] : [...(previous.firstAttemptWrongIndices || [])],
-      submissions,
       answerKeyHash,
-      evidenceQuality: "event-log"
-    };
+      at: now,
+      completed
+    });
     if (!completed) {
       saveState();
       render();
@@ -4592,15 +4711,14 @@
       context: safeText(runtime.notebookContext, "", 320).trim(),
       addedAt: now
     };
-    const sources = [...(existing?.sources || [])];
-    const sourceKey = `${normalizeAnswer(nextSource.sourceTag)}\n${normalizeAnswer(nextSource.context)}`;
-    if (!sources.some((source) => `${normalizeAnswer(source.sourceTag)}\n${normalizeAnswer(source.context)}` === sourceKey)) sources.push(nextSource);
+    const sources = mergeReadingSources(existing?.sources, [nextSource], existing?.addedAt || now);
     state.savedWords[word.id] = {
       cardId: word.id,
       train: Boolean(existing?.train || train),
       addedAt: existing?.addedAt || now,
       sources
     };
+    runtime.notebookContext = "";
     saveState();
     closeDialog();
     render();
@@ -4726,15 +4844,21 @@
       if (!oldSpellingStillUsed) delete state.lexemeProgress[oldLexemeId];
     }
     state.customWords[id] = updated;
+    const existingSavedEntry = state.savedWords[id];
     state.savedWords[id] = {
       cardId: id,
       train: Boolean(draft.train),
-      addedAt: state.savedWords[id]?.addedAt || now,
-      sources: [{ sourceTag: updated.sourceTag, context: updated.context || "", addedAt: state.savedWords[id]?.addedAt || now }]
+      addedAt: existingSavedEntry?.addedAt || now,
+      sources: mergeReadingSources(existingSavedEntry?.sources, [{
+        sourceTag: updated.sourceTag,
+        context: updated.context || "",
+        addedAt: now
+      }], existingSavedEntry?.addedAt || now)
     };
     invalidateCustomCatalog();
     runtime.editingCustomId = null;
     runtime.pendingCustomDraft = null;
+    if (!existing) runtime.notebookContext = "";
     closeDialog();
     saveState();
     render();
@@ -4760,6 +4884,14 @@
     const id = canonicalWordId(cardId);
     const word = state.customWords[id];
     if (!word) return;
+    const savedEntry = state.savedWords[id];
+    if (savedEntry) {
+      word.archivedSavedEntry = {
+        train: Boolean(savedEntry.train),
+        addedAt: savedEntry.addedAt,
+        sources: mergeReadingSources(savedEntry.sources, [], savedEntry.addedAt)
+      };
+    }
     word.archived = true;
     word.updatedAt = Date.now();
     delete state.savedWords[id];
@@ -4774,13 +4906,25 @@
     const id = canonicalWordId(cardId);
     const word = state.customWords[id];
     if (!word) return;
+    const archivedSavedEntry = word.archivedSavedEntry;
+    const now = Date.now();
     word.archived = false;
-    word.updatedAt = Date.now();
-    state.savedWords[id] = { cardId: id, train: false, addedAt: Date.now(), sources: [{ sourceTag: word.sourceTag, context: word.context || "", addedAt: Date.now() }] };
+    word.updatedAt = now;
+    state.savedWords[id] = {
+      cardId: id,
+      train: Boolean(archivedSavedEntry?.train),
+      addedAt: archivedSavedEntry?.addedAt || now,
+      sources: sanitizeReadingSources(
+        archivedSavedEntry?.sources,
+        archivedSavedEntry?.addedAt || now,
+        { sourceTag: word.sourceTag, context: word.context || "", addedAt: now }
+      )
+    };
+    word.archivedSavedEntry = null;
     invalidateCustomCatalog();
     saveState();
     render();
-    toast(`${word.word} 已恢复为只收藏`, "♡");
+    toast(`${word.word} 已恢复，阅读来源保持完整`, "♡");
   }
 
   function showDialog(content) {
@@ -5398,9 +5542,11 @@
     lemmaIdForWord,
     sanitizeAttemptEvents,
     sanitizeRecognitionEvents,
+    sanitizeRecognitionPlans,
     sanitizeCustomWordDraft,
     sanitizeCustomWords,
     sanitizeSavedWords,
+    mergeReadingSources,
     savedTrainingIds,
     practiceCueType,
     practiceGradeForTask,
@@ -5422,6 +5568,7 @@
     normalizeExerciseAnswer,
     coreExerciseAnswerMatches,
     coreAnswerKeyHash,
+    recordCoreExerciseSubmission,
     coreExerciseEvidenceMetrics,
     coreExerciseAvailable,
     damerauDistanceOne,
@@ -5462,6 +5609,7 @@
     missingAssetLabel,
     localWeekKey,
     weeklyCheckPlan,
+    ensureWeeklyCheckPlan,
     weeklyCheckOptions,
     shouldIgnoreGlobalEnter,
     taskCountsAsCleanInitial,

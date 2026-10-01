@@ -163,6 +163,8 @@ assert.equal(api.practiceGradeForTask({ attempts: 1, hadLapse: false, assisted: 
 
 const appSource = fs.readFileSync(path.join(__dirname, "..", "assets", "app.js"), "utf8");
 const practiceSource = appSource.slice(appSource.indexOf("function renderPractice()"), appSource.indexOf("function renderCoreExercise()"));
+const coreExerciseSource = appSource.slice(appSource.indexOf("function renderCoreExercise()"), appSource.indexOf("function renderPracticeComplete()"));
+const practiceCompleteSource = appSource.slice(appSource.indexOf("function renderPracticeComplete()"), appSource.indexOf("function relativeTime("));
 const pkSource = appSource.slice(appSource.indexOf("function renderPkGame()"), appSource.indexOf("function submitPk()"));
 const gradeSource = appSource.slice(appSource.indexOf("function gradePractice()"), appSource.indexOf("function advancePractice()"));
 const submitPkSource = appSource.slice(appSource.indexOf("function submitPk()"), appSource.indexOf("function finishPk()"));
@@ -172,6 +174,10 @@ assert.doesNotMatch(pkSource, /word\.en/, "PK must not use an answer-bearing Cor
 assert.doesNotMatch(gradeSource, /acceptedAnswers/, "semantic alternatives must not pass spelling practice");
 assert.doesNotMatch(submitPkSource, /acceptedAnswers/, "semantic alternatives must not pass spelling PK");
 assert.match(practiceSource, /aria-label="\$\{coreEnglish \? "Book picture clue" : "单词图片提示"\}"/);
+assert.match(coreExerciseSource, /Skip this optional exercise and return to today's tasks\./, "a workbook page without answers must route back to today's plan");
+assert.match(practiceCompleteSource, /Skip optional exercise · Back to today/);
+const stylesSource = fs.readFileSync(path.join(__dirname, "..", "assets", "styles.css"), "utf8");
+assert.match(stylesSource, /@media \(max-width: 820px\)[\s\S]*?\.btn-small\s*\{\s*min-height:\s*44px;/, "small mobile controls must keep a 44px touch target");
 
 assert.deepEqual(
   Array.from(api.bankKeys),
@@ -370,6 +376,7 @@ const evidenceExercise = api.sanitizeCoreExercises({
     firstAttemptCorrectIndices: [0, 2, 3, 4, 5, 6, 7, 8, 9],
     firstAttemptWrongIndices: [1],
     submissions: [{ at: 400, responses: ["a", "wrong", "d", "b", "c", "ease", "dentist", "finger", "body", "healthy"], correctIndices: [0, 2, 3, 4, 5, 6, 7, 8, 9], wrongIndices: [1], answerKeyHash: exerciseHash }],
+    firstAttemptAnswerKeyHash: exerciseHash,
     answerKeyHash: exerciseHash,
     evidenceQuality: "event-log"
   }
@@ -378,6 +385,14 @@ assert.equal(evidenceExercise.firstAttemptResponses[1], "wrong");
 assert.deepEqual(Array.from(evidenceExercise.firstAttemptWrongIndices), [1]);
 assert.equal(evidenceExercise.submissions.length, 1);
 assert.equal(evidenceExercise.answerKeyHash, exerciseHash);
+assert.equal(evidenceExercise.firstAttemptAnswerKeyHash, exerciseHash);
+const legacyEventWithoutFirstHash = api.sanitizeCoreExercises({
+  "core2000-b1-u01-a-exercise": {
+    ...evidenceExercise,
+    firstAttemptAnswerKeyHash: undefined
+  }
+})["core2000-b1-u01-a-exercise"];
+assert.equal(legacyEventWithoutFirstHash.firstAttemptAnswerKeyHash, "", "older event logs must not borrow a later answer-key hash during migration");
 assert.deepEqual(JSON.parse(JSON.stringify(api.coreExerciseEvidenceMetrics({ coreExercises: { "core2000-b1-u01-a-exercise": evidenceExercise } }))), {
   pages: 1,
   answerCount: 10,
@@ -385,6 +400,37 @@ assert.deepEqual(JSON.parse(JSON.stringify(api.coreExerciseEvidenceMetrics({ cor
   firstAttemptRate: 90,
   changedAnswerKeys: 0
 });
+const legacyFollowup = api.recordCoreExerciseSubmission(checkedExercise, {
+  at: 600,
+  responses: exerciseAnswers,
+  correctIndices: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9],
+  wrongIndices: [],
+  answerKeyHash: exerciseHash,
+  completed: true
+});
+assert.equal(legacyFollowup.attempts, 3);
+assert.equal(legacyFollowup.firstAttemptAt, null, "a legacy record with attempts must never gain a fabricated first attempt later");
+assert.equal(legacyFollowup.firstAttemptAnswerKeyHash, "");
+assert.equal(legacyFollowup.evidenceQuality, "legacy-summary");
+assert.equal(legacyFollowup.submissions.length, 1, "later real submissions may be retained without rewriting legacy history");
+const genuineFirstAttempt = api.recordCoreExerciseSubmission({ attempts: 0 }, {
+  at: 700,
+  responses: exerciseAnswers,
+  correctIndices: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9],
+  wrongIndices: [],
+  answerKeyHash: "first-version",
+  completed: true
+});
+const laterAnswerVersion = api.recordCoreExerciseSubmission(genuineFirstAttempt, {
+  at: 800,
+  responses: exerciseAnswers,
+  correctIndices: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9],
+  wrongIndices: [],
+  answerKeyHash: "later-version",
+  completed: true
+});
+assert.equal(laterAnswerVersion.firstAttemptAnswerKeyHash, "first-version", "later answer keys must not overwrite the first-attempt version");
+assert.equal(laterAnswerVersion.answerKeyHash, "later-version");
 assert.deepEqual(
   Array.from(api.filterDueIdsForBank(["ket:test", "core2000:test", "core2000:test"], "core2000")),
   ["core2000:test"],
@@ -588,6 +634,34 @@ const weeklyPlan = api.weeklyCheckPlan({
 }, new Date(2026, 8, 30, 12));
 assert.deepEqual(Array.from(weeklyPlan), ["ket:test"], "weekly check must exclude today's new cards and deduplicate the same spelling");
 assert.ok(api.weeklyCheckOptions("ket:test", weeklyPlan, "2026-09-28").includes("ket:test"));
+const weeklySource = {
+  progress: { "ket:test": { learnedAt: 10 } },
+  today: { newIds: [] },
+  recognitionEvents: [],
+  recognitionPlans: {}
+};
+assert.deepEqual(Array.from(api.ensureWeeklyCheckPlan(weeklySource, new Date(2026, 8, 29, 12), 1234)), ["ket:test"]);
+weeklySource.today.newIds = ["ket:test"];
+assert.deepEqual(
+  Array.from(api.weeklyCheckPlan(weeklySource, new Date(2026, 9, 2, 12))),
+  ["ket:test"],
+  "after the first start, the same weekly recognition cards must stay frozen across days"
+);
+assert.equal(weeklySource.recognitionPlans["2026-09-28"].startedAt, 1234);
+assert.deepEqual(JSON.parse(JSON.stringify(api.sanitizeRecognitionPlans(weeklySource.recognitionPlans))), {
+  "2026-09-28": { weekKey: "2026-09-28", cardIds: ["ket:test"], startedAt: 1234 }
+});
+const migratedStartedWeek = {
+  progress: { "ket:test": { learnedAt: 10 }, "core2000:test": { learnedAt: 20 } },
+  today: { newIds: ["ket:test"] },
+  recognitionEvents: [{ cardId: "ket:test", weekKey: "2026-09-28", occurredAt: 100 }],
+  recognitionPlans: {}
+};
+assert.equal(
+  api.ensureWeeklyCheckPlan(migratedStartedWeek, new Date(2026, 9, 2, 12), 200)[0],
+  "ket:test",
+  "a migrated in-progress week must retain already answered cards even after the date changes"
+);
 
 const baseBackup = {
   schemaVersion: 1,
@@ -633,6 +707,7 @@ assert.equal(merged.today.tasks.length, 1, "semantic duplicate review tasks must
 assert.equal(merged.today.tasks[0].id, "review:ket:test:4:full");
 assert.equal(merged.today.planVersion, 1);
 assert.deepEqual(Array.from(merged.today.plannedReviewIds), ["ket:test"]);
+assert.deepEqual(JSON.parse(JSON.stringify(merged.recognitionPlans)), {}, "legacy V1/V2 records must migrate safely without recognition plans");
 
 const frozenPlan = api.mergeState({
   ...baseBackup,
@@ -730,6 +805,11 @@ const multiSourceSavedWords = api.sanitizeSavedWords({
 });
 assert.equal(multiSourceSavedWords["ket:test"].sources.length, 2, "source + normalized context must deduplicate repeated reading encounters");
 assert.equal(multiSourceSavedWords["ket:test"].sources[1].sourceTag, "Mighty Robot");
+const editedSources = api.mergeReadingSources(multiSourceSavedWords["ket:test"].sources, [
+  { sourceTag: "New Book", context: "A new reading scene.", addedAt: 104 }
+], 100);
+assert.equal(editedSources.length, 3, "editing or adding a reading encounter must preserve all existing sources");
+assert.equal(editedSources[0].sourceTag, "Dragon Masters");
 
 const customDraft = api.sanitizeCustomWordDraft({
   word: "whispered",
@@ -751,6 +831,22 @@ assert.equal(customDraft.visual.image, undefined, "custom picture input must rej
 assert.ok(customDraft.breakdown.parts.length > 1, "custom cards need safe visual spelling chunks for the shared study view");
 assert.equal(customDraft.breakdown.type, "spelling chunks");
 assert.equal(api.sanitizeCustomWordDraft({ word: "123", en: "a number", example: "It is 123." }), null);
+
+const archivedCustomDraft = api.sanitizeCustomWordDraft({
+  ...customDraft,
+  id: "custom:archive-001",
+  archived: true,
+  archivedSavedEntry: {
+    train: true,
+    addedAt: 90,
+    sources: [
+      { sourceTag: "Dragon Masters", context: "First full context.", addedAt: 91 },
+      { sourceTag: "Mighty Robot", context: "Second full context.", addedAt: 92 }
+    ]
+  }
+}, "custom:archive-001");
+assert.equal(archivedCustomDraft.archivedSavedEntry.train, true);
+assert.equal(archivedCustomDraft.archivedSavedEntry.sources.length, 2, "archive migration must retain every reading source for restoration");
 
 const customCardId = "custom:whispered-001";
 const customWordState = api.mergeState({
