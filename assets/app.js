@@ -6,7 +6,12 @@
   const BACKUP_FORMAT = "kevin-word-quest-portable-record";
   const STATE_SCHEMA_VERSION = 2;
   const BACKUP_FORMAT_VERSION = 2;
-  const APP_VERSION = "2026.10.01";
+  const APP_VERSION = "2026.10.07";
+  const AI_WORD_PACK_FORMAT = "kevin-word-quest-ai-pack";
+  const AI_WORD_PACK_VERSION = 1;
+  const AI_WORD_PACK_MAX_WORDS = 20;
+  const AI_WORD_PACK_MAX_FILE_BYTES = 1_500_000;
+  const AI_WORD_PACK_MAX_IMAGE_BYTES = 24 * 1024;
   const DEVICE_KEY = "kevin-wordquest:device-id:v1";
   const DAY_MS = 86_400_000;
   const WRITER_ID = window.crypto?.randomUUID?.() || `tab-${Date.now()}-${Math.random().toString(36).slice(2)}`;
@@ -101,6 +106,7 @@
     notebookDialogTab: "existing",
     editingCustomId: null,
     pendingCustomDraft: null,
+    pendingWordPack: null,
     checkupFeedback: null,
     practiceResult: null,
     practiceSource: null,
@@ -121,6 +127,7 @@
     runtime.notebookSearchTimer = null;
     runtime.editingCustomId = null;
     runtime.pendingCustomDraft = null;
+    runtime.pendingWordPack = null;
     runtime.checkupFeedback = null;
     runtime.practiceResult = null;
     runtime.practiceSource = null;
@@ -971,8 +978,31 @@
     return result;
   }
 
+  function embeddedImageHasValidSignature(type, payload) {
+    try {
+      const binary = atob(payload.slice(0, 48));
+      const bytes = Array.from(binary, (character) => character.charCodeAt(0));
+      if (type === "png") return bytes.slice(0, 8).join(",") === "137,80,78,71,13,10,26,10";
+      if (type === "jpeg") return bytes[0] === 255 && bytes[1] === 216 && bytes[2] === 255;
+      if (type === "webp") {
+        return binary.slice(0, 4) === "RIFF" && binary.slice(8, 12) === "WEBP";
+      }
+    } catch (error) {
+      return false;
+    }
+    return false;
+  }
+
   function safeCustomImage(value) {
-    const image = safeText(value, "", 500).trim();
+    const raw = typeof value === "string" ? value.trim() : "";
+    const embedded = /^data:image\/(webp|png|jpeg);base64,([a-z0-9+/]+={0,2})$/i.exec(raw);
+    if (embedded && embedded[2].length % 4 === 0) {
+      const padding = embedded[2].endsWith("==") ? 2 : embedded[2].endsWith("=") ? 1 : 0;
+      const bytes = embedded[2].length * 3 / 4 - padding;
+      if (bytes >= 32 && bytes <= AI_WORD_PACK_MAX_IMAGE_BYTES && embeddedImageHasValidSignature(embedded[1].toLowerCase(), embedded[2])) return raw;
+      return "";
+    }
+    const image = safeText(raw, "", 500).trim();
     if (!image) return "";
     if (/^https:\/\/[^\s]+$/i.test(image)) return image;
     if (/^assets\/[a-z0-9_./-]+$/i.test(image) && !image.includes("..")) return image;
@@ -1021,13 +1051,19 @@
     const id = /^custom:[a-z0-9-]{6,100}$/i.test(existingId || raw.id || "")
       ? (existingId || raw.id)
       : "";
-    const pos = safeText(raw.pos, "", 40).trim();
+    const pos = safeText(raw.pos || raw.partOfSpeech, "", 40).trim();
     const lemma = (safeText(raw.lemma, word, 80).trim().replace(/\s+/g, " ") || word).toLowerCase();
     if (!/^[a-z][a-z' -]{0,78}$/i.test(lemma)) return null;
     const formType = safeText(raw.formType, "", 60).trim();
+    const ipa = safeText(raw.ipa, "", 80).trim();
     const context = safeText(raw.context, "", 320).trim().replace(/\s+/g, " ");
     const image = safeCustomImage(raw.image || raw.visual?.image);
-    const spellingParts = word.split(/([ '-])/).filter(Boolean).flatMap((part) =>
+    const suppliedParts = Array.isArray(raw.spellingChunks)
+      ? raw.spellingChunks.map((part) => safeText(part, "", 24).trim()).filter(Boolean).slice(0, 12)
+      : Array.isArray(raw.breakdown?.parts)
+        ? raw.breakdown.parts.map((part) => safeText(part?.text, "", 24).trim()).filter(Boolean).slice(0, 12)
+        : [];
+    const spellingParts = suppliedParts.length ? suppliedParts : word.split(/([ '-])/).filter(Boolean).flatMap((part) =>
       /^[a-z]+$/i.test(part) && part.length > 4
         ? part.match(/.{1,3}/g) || [part]
         : [part]
@@ -1047,15 +1083,15 @@
       semanticAlternatives: [],
       spellingVariants: [],
       quizClue: en,
-      visual: image ? { image } : { emoji: "📖" },
+      visual: image ? { image, alt: safeText(raw.imageAlt || raw.visual?.alt, `Picture clue for ${word}`, 160) } : { emoji: "📖" },
       breakdown: {
         label: "SPELLING CHUNKS",
         type: "spelling chunks",
         parts: spellingParts.map((text) => ({ text }))
       },
-      tip: context || `Picture the scene where you met “${word}”.`,
+      tip: safeText(raw.tip || raw.memoryTip, context || `Picture the scene where you met “${word}”.`, 320).trim(),
       zh: "",
-      ipa: "",
+      ipa,
       custom: true,
       archived: Boolean(raw.archived),
       archivedSavedEntry: raw.archivedSavedEntry && typeof raw.archivedSavedEntry === "object" && !Array.isArray(raw.archivedSavedEntry)
@@ -1084,6 +1120,174 @@
       result[rawId] = word;
     }
     return result;
+  }
+
+  function embeddedImageBytes(dataUrl) {
+    const match = /^data:image\/(?:webp|png|jpeg);base64,([a-z0-9+/]+={0,2})$/i.exec(dataUrl || "");
+    if (!match || match[1].length % 4 !== 0) return 0;
+    const padding = match[1].endsWith("==") ? 2 : match[1].endsWith("=") ? 1 : 0;
+    return match[1].length * 3 / 4 - padding;
+  }
+
+  function aiPackImageData(rawImage) {
+    if (typeof rawImage === "string") {
+      const image = safeCustomImage(rawImage);
+      return image.startsWith("data:image/") ? image : "";
+    }
+    if (!rawImage || typeof rawImage !== "object" || Array.isArray(rawImage)) return "";
+    const suppliedDataUrl = safeCustomImage(rawImage.dataUrl);
+    if (suppliedDataUrl.startsWith("data:image/")) return suppliedDataUrl;
+    const mimeType = safeText(rawImage.mimeType, "", 40).toLowerCase().replace("image/jpg", "image/jpeg");
+    const base64 = typeof rawImage.base64 === "string" ? rawImage.base64.replace(/\s+/g, "") : "";
+    if (!/^image\/(webp|png|jpeg)$/.test(mimeType) || !base64) return "";
+    return safeCustomImage(`data:${mimeType};base64,${base64}`);
+  }
+
+  function sanitizeAiWordPack(raw) {
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new Error("生词包必须是 JSON 对象");
+    if (raw.format !== AI_WORD_PACK_FORMAT || raw.version !== AI_WORD_PACK_VERSION) {
+      throw new Error("生词包格式或版本不受支持");
+    }
+    if (!Array.isArray(raw.words) || !raw.words.length) throw new Error("生词包中没有单词");
+    if (raw.words.length > AI_WORD_PACK_MAX_WORDS) throw new Error(`每个生词包最多 ${AI_WORD_PACK_MAX_WORDS} 个词`);
+    const sourceTag = safeText(raw.source || raw.sourceTag || raw.title, "AI Word Pack", 80).trim() || "AI Word Pack";
+    const title = safeText(raw.title, sourceTag, 120).trim() || sourceTag;
+    const trainByDefault = raw.trainByDefault !== false;
+    const words = [];
+    const rejected = [];
+    const seen = new Set();
+    raw.words.forEach((item, index) => {
+      if (!item || typeof item !== "object" || Array.isArray(item)) {
+        rejected.push({ index: index + 1, word: "", reason: "不是有效的单词对象" });
+        return;
+      }
+      const label = safeText(item.word, `第 ${index + 1} 项`, 80);
+      const requiredText = [item.word, item.partOfSpeech || item.pos, item.ipa, item.lemma, item.definition || item.en, item.example, item.memoryTip || item.tip];
+      if (requiredText.some((value) => typeof value !== "string" || !value.trim())) {
+        rejected.push({ index: index + 1, word: label, reason: "缺少词形、词性、音标、基础词、释义、例句或记忆提示" });
+        return;
+      }
+      const englishText = [item.word, item.partOfSpeech || item.pos, item.formType || "", item.definition || item.en, item.example, item.context || "", item.memoryTip || item.tip, item.image?.alt || item.imageAlt || ""].join(" ");
+      if (/[\u3400-\u9fff]/.test(englishText)) {
+        rejected.push({ index: index + 1, word: label, reason: "教学内容必须保持纯英文" });
+        return;
+      }
+      if (!Array.isArray(item.spellingChunks) || !item.spellingChunks.length) {
+        rejected.push({ index: index + 1, word: label, reason: "缺少 spellingChunks" });
+        return;
+      }
+      const chunkLetters = item.spellingChunks.join("").toLowerCase().replace(/[^a-z]/g, "");
+      const wordLetters = String(item.word).toLowerCase().replace(/[^a-z]/g, "");
+      if (!wordLetters || chunkLetters !== wordLetters) {
+        rejected.push({ index: index + 1, word: label, reason: "spellingChunks 拼接后与目标词不一致" });
+        return;
+      }
+      if (!normalizeAnswer(item.example).includes(normalizeAnswer(item.word))) {
+        rejected.push({ index: index + 1, word: label, reason: "例句没有使用目标词形" });
+        return;
+      }
+      const image = aiPackImageData(item.image || item.imageDataUrl);
+      const draft = sanitizeCustomWordDraft({
+        word: item.word,
+        pos: item.partOfSpeech || item.pos,
+        lemma: item.lemma,
+        formType: item.formType,
+        ipa: item.ipa,
+        en: item.definition || item.en,
+        example: item.example,
+        context: item.context,
+        sourceTag: item.source || item.sourceTag || sourceTag,
+        spellingChunks: item.spellingChunks,
+        memoryTip: item.memoryTip || item.tip,
+        image,
+        imageAlt: item.image?.alt || item.imageAlt
+      });
+      if (!draft) {
+        rejected.push({ index: index + 1, word: label, reason: "缺少有效词形、英文释义、例句或来源" });
+        return;
+      }
+      if (!draft.visual?.image?.startsWith("data:image/")) {
+        rejected.push({ index: index + 1, word: draft.word, reason: "缺少合格的内嵌图片，或图片超过 24KB" });
+        return;
+      }
+      const duplicateKey = `${normalizeAnswer(draft.word)}\n${normalizeAnswer(draft.en)}`;
+      if (seen.has(duplicateKey)) {
+        rejected.push({ index: index + 1, word: draft.word, reason: "包内重复" });
+        return;
+      }
+      seen.add(duplicateKey);
+      words.push({ draft, train: item.train == null ? trainByDefault : Boolean(item.train) });
+    });
+    if (!words.length) throw new Error(rejected[0]?.reason || "没有可导入的有效单词");
+    return {
+      format: AI_WORD_PACK_FORMAT,
+      version: AI_WORD_PACK_VERSION,
+      title,
+      sourceTag,
+      trainByDefault,
+      words,
+      rejected,
+      imageBytes: words.reduce((total, item) => total + embeddedImageBytes(item.draft.visual.image), 0)
+    };
+  }
+
+  function applyAiWordPack(targetState, pack, now = Date.now()) {
+    targetState.customWords ||= {};
+    targetState.savedWords ||= {};
+    let added = 0;
+    let merged = 0;
+    const importedIds = [];
+    for (const item of pack.words || []) {
+      const draft = item.draft;
+      if (!draft) continue;
+      const duplicate = Object.values(targetState.customWords).find((word) =>
+        normalizeAnswer(word.word) === normalizeAnswer(draft.word)
+        && normalizeAnswer(word.en) === normalizeAnswer(draft.en)
+      );
+      if (duplicate) {
+        const archivedSavedEntry = duplicate.archivedSavedEntry;
+        duplicate.archived = false;
+        duplicate.archivedSavedEntry = null;
+        duplicate.updatedAt = now;
+        if (!duplicate.visual?.image && draft.visual?.image) duplicate.visual = { ...draft.visual };
+        if (!duplicate.ipa && draft.ipa) duplicate.ipa = draft.ipa;
+        const saved = targetState.savedWords[duplicate.id];
+        const existingSources = saved?.sources || archivedSavedEntry?.sources;
+        const existingAddedAt = saved?.addedAt || archivedSavedEntry?.addedAt || now;
+        targetState.savedWords[duplicate.id] = {
+          cardId: duplicate.id,
+          train: Boolean(saved?.train || archivedSavedEntry?.train || item.train),
+          addedAt: existingAddedAt,
+          sources: mergeReadingSources(existingSources, [{
+            sourceTag: draft.sourceTag,
+            context: draft.context || "",
+            addedAt: now
+          }], existingAddedAt)
+        };
+        importedIds.push(duplicate.id);
+        merged += 1;
+        continue;
+      }
+      let id = customWordId(draft);
+      while (targetState.customWords[id]) id = customWordId(draft);
+      targetState.customWords[id] = {
+        ...draft,
+        id,
+        archived: false,
+        archivedSavedEntry: null,
+        createdAt: now,
+        updatedAt: now
+      };
+      targetState.savedWords[id] = {
+        cardId: id,
+        train: Boolean(item.train),
+        addedAt: now,
+        sources: [{ sourceTag: draft.sourceTag, context: draft.context || "", addedAt: now }]
+      };
+      importedIds.push(id);
+      added += 1;
+    }
+    return { added, merged, importedIds };
   }
 
   function sanitizeSavedWords(raw, unresolvedSink = null) {
@@ -1397,6 +1601,21 @@
     return storedRevision > localRevision && Boolean(storedWriter) && storedWriter !== writerId;
   }
 
+  function compactBackupJson(serializedState) {
+    if (typeof serializedState !== "string" || !serializedState.includes("data:image/")) return serializedState;
+    try {
+      const backup = JSON.parse(serializedState);
+      for (const word of Object.values(backup.customWords || {})) {
+        if (word?.visual?.image?.startsWith("data:image/")) {
+          word.visual = { emoji: "📖", alt: safeText(word.visual.alt, "", 160) };
+        }
+      }
+      return JSON.stringify(backup);
+    } catch (error) {
+      return serializedState;
+    }
+  }
+
   function saveState() {
     try {
       const previous = localStorage.getItem(STATE_KEY);
@@ -1423,7 +1642,7 @@
       state.updatedAt = now;
       state.savedAt = now;
       runtime.storageConflict = false;
-      if (previous) localStorage.setItem(BACKUP_KEY, previous);
+      if (previous) localStorage.setItem(BACKUP_KEY, compactBackupJson(previous));
       localStorage.setItem(STATE_KEY, JSON.stringify(state));
     } catch (error) {
       console.error("保存学习记录失败", error);
@@ -3965,7 +4184,10 @@
 
   function customWordFormValue(word, key) {
     if (!word) return "";
-    if (key === "image") return word.visual?.image || "";
+    if (key === "image") {
+      const image = word.visual?.image || "";
+      return image.startsWith("data:image/") ? "" : image;
+    }
     return word[key] || "";
   }
 
@@ -4023,7 +4245,7 @@
     const sourceNames = [...new Set(allSavedEntries.flatMap((entry) => (entry.sources || []).map((source) => source.sourceTag)))].sort();
     const archivedCustomWords = Object.values(state.customWords || {}).filter((word) => word.archived);
     return `<section class="view-page notebook-page">
-      <header class="notebook-header"><div><p class="eyebrow">MY WORDS</p><h1>阅读中遇到的词，都放在这里</h1><p>从 Mighty Robot、Dragon Masters 或其他阅读中收藏生词，再决定是否进入训练。</p></div><button class="btn btn-primary" type="button" data-action="open-add-word">＋ 添加阅读生词</button></header>
+      <header class="notebook-header"><div><p class="eyebrow">MY WORDS</p><h1>阅读中遇到的词，都放在这里</h1><p>从 Mighty Robot、Dragon Masters 或其他阅读中收藏生词，再决定是否进入训练。</p></div><div class="notebook-header-actions"><button class="btn btn-soft" type="button" data-action="open-ai-word-pack">✦ AI 批量生成与导入</button><button class="btn btn-primary" type="button" data-action="open-add-word">＋ 添加阅读生词</button></div></header>
       <section class="notebook-summary" aria-label="生词本概览"><div><strong>${allSavedEntries.length}</strong><span>收藏总数</span></div><div><strong>${trainingCount}</strong><span>训练候选</span></div><div><strong>${reviewingCount}</strong><span>已进入复习</span></div><div><strong>${sourceNames.length}</strong><span>来源数</span></div></section>
       <section class="notebook-toolbar"><label class="search-box"><span aria-hidden="true">⌕</span><input id="notebookSearch" type="search" autocomplete="off" placeholder="搜索已收藏的词" value="${escapeHtml(runtime.notebookQuery)}" /></label><select id="notebookStatus" aria-label="状态筛选"><option value="all" ${runtime.notebookStatus === "all" ? "selected" : ""}>全部状态</option><option value="training" ${runtime.notebookStatus === "training" ? "selected" : ""}>训练中</option><option value="saved" ${runtime.notebookStatus === "saved" ? "selected" : ""}>只收藏</option><option value="custom" ${runtime.notebookStatus === "custom" ? "selected" : ""}>自建词</option></select><select id="notebookSourceFilter" aria-label="来源筛选"><option value="all">全部来源</option>${sourceNames.map((name) => `<option value="${escapeHtml(name)}" ${runtime.notebookSourceFilter === name ? "selected" : ""}>${escapeHtml(name)}</option>`).join("")}</select><select id="notebookSort" aria-label="排序"><option value="recent" ${runtime.notebookSort === "recent" ? "selected" : ""}>最近加入</option><option value="due" ${runtime.notebookSort === "due" ? "selected" : ""}>下次复习</option><option value="az" ${runtime.notebookSort === "az" ? "selected" : ""}>A–Z</option></select></section>
       <section class="notebook-section"><div class="notebook-word-grid">${savedCards || `<div class="notebook-empty"><span>📖</span><h2>${allSavedEntries.length ? "没有符合筛选条件的词" : "阅读时遇到不会的词，就把它放进来。"}</h2><p>${allSavedEntries.length ? "换一个状态、来源或搜索词试试。" : "可以先收藏，之后再决定是否加入每天的训练。"}</p><button class="btn btn-primary" type="button" data-action="${allSavedEntries.length ? "reset-notebook-filters" : "open-add-word"}">${allSavedEntries.length ? "清除筛选后再看" : "添加第一个阅读生词"}</button></div>`}</div></section>
@@ -4955,7 +5177,113 @@
     window.setTimeout(() => document.getElementById(runtime.notebookDialogTab === "existing" ? "notebookCatalogSearch" : "customWord")?.focus(), 20);
   }
 
+  function formatByteCount(bytes) {
+    if (bytes < 1024) return `${bytes} B`;
+    return `${(bytes / 1024).toFixed(bytes < 10 * 1024 ? 1 : 0)} KB`;
+  }
+
+  function showAiWordPackDialog() {
+    runtime.pendingWordPack = null;
+    showDialog(`<div class="dialog-content ai-word-pack-dialog">
+      <div class="dialog-title-row"><div><p class="eyebrow">AI WORD PACK</p><h2>让 AI 一次做好生词卡</h2><p>提示词规定了纯英文释义、例句、音标、拼写分块和无文字小图片。AI 最后交付一个可直接导入的单文件。</p></div><button class="dialog-close" type="button" data-action="close-dialog" aria-label="关闭">×</button></div>
+      <ol class="word-pack-steps">
+        <li><span>1</span><div><strong>把提示词交给 AI</strong><p>同时告诉它单词、原句和书名；一次建议 10–20 个。</p></div></li>
+        <li><span>2</span><div><strong>下载 .wordpack.json</strong><p>图片已经压进文件，不需要额外复制图片文件夹。</p></div></li>
+        <li><span>3</span><div><strong>在这里检查并导入</strong><p>网站会先验证内容和图片，确认前不会改动学习记录。</p></div></li>
+      </ol>
+      <section class="word-pack-prompt-card"><div><small>READY-TO-USE PROMPT</small><strong>Kevin Word Quest 生词包生成器</strong><p>要求 AI 使用文件工具生成 JSON，而不是把大段 Base64 贴进聊天窗口。</p></div><div class="word-pack-prompt-actions"><button class="btn btn-primary" type="button" data-action="copy-ai-word-pack-prompt">复制完整提示词</button><a class="btn btn-soft" href="templates/AI_WORD_PACK_PROMPT.md" download>下载提示词</a><a class="btn btn-ghost" href="templates/kevin-word-pack-template.wordpack.json" download>下载空白模板</a></div></section>
+      <div class="word-pack-import-zone"><span aria-hidden="true">⇩</span><div><strong>已经让 AI 生成好了？</strong><p>选择 .wordpack.json 文件。最多 ${AI_WORD_PACK_MAX_WORDS} 个词，每张图片不超过 24KB。</p></div><button class="btn btn-coral" type="button" data-action="select-ai-word-pack">选择生词包</button></div>
+      <p class="word-pack-privacy">所有验证与导入都在这台设备的浏览器内完成，不会上传 Kevin 的阅读内容。</p>
+    </div>`);
+  }
+
+  async function copyAiWordPackPrompt() {
+    try {
+      const response = await fetch("templates/AI_WORD_PACK_PROMPT.md", { cache: "no-store" });
+      if (!response.ok) throw new Error("提示词文件不可用");
+      const text = await response.text();
+      let copied = false;
+      if (navigator.clipboard?.writeText) {
+        try {
+          await navigator.clipboard.writeText(text);
+          copied = true;
+        } catch (error) {
+          copied = false;
+        }
+      }
+      if (!copied) {
+        const textarea = document.createElement("textarea");
+        textarea.value = text;
+        textarea.setAttribute("readonly", "");
+        textarea.style.position = "fixed";
+        textarea.style.opacity = "0";
+        document.body.appendChild(textarea);
+        textarea.select();
+        const fallbackCopied = document.execCommand("copy");
+        textarea.remove();
+        if (!fallbackCopied) throw new Error("浏览器不支持复制");
+      }
+      toast("完整提示词已复制，可以直接粘贴给 AI", "✦");
+    } catch (error) {
+      console.warn(error);
+      toast("自动复制失败，请点击“下载提示词”", "⚠️");
+    }
+  }
+
+  function renderAiWordPackPreview(pack, filename) {
+    const rows = pack.words.map(({ draft, train }) => `<article class="word-pack-preview-row">
+      <img src="${escapeHtml(draft.visual.image)}" alt="${escapeHtml(draft.visual.alt || `Picture for ${draft.word}`)}" />
+      <div><strong>${escapeHtml(draft.word)} <small>${escapeHtml(draft.ipa || "")}</small></strong><p>${escapeHtml(draft.en)}</p><span>${escapeHtml(draft.example)}</span></div>
+      <span class="word-pack-train-state">${train ? "加入训练" : "只收藏"}</span>
+    </article>`).join("");
+    const rejected = pack.rejected.length
+      ? `<details class="word-pack-rejected"><summary>${pack.rejected.length} 项未通过，将不会导入</summary><ul>${pack.rejected.map((item) => `<li>${escapeHtml(item.word || `第 ${item.index} 项`)}：${escapeHtml(item.reason)}</li>`).join("")}</ul></details>`
+      : "";
+    showDialog(`<div class="dialog-content ai-word-pack-dialog ai-word-pack-preview">
+      <div class="dialog-title-row"><div><p class="eyebrow">PARENT CHECK</p><h2>${escapeHtml(pack.title)}</h2><p>${pack.words.length} 个有效词 · ${formatByteCount(pack.imageBytes)} 图片 · 来源 ${escapeHtml(pack.sourceTag)}</p></div><button class="dialog-close" type="button" data-action="close-dialog" aria-label="关闭">×</button></div>
+      <div class="word-pack-preview-list">${rows}</div>${rejected}
+      <p class="record-transfer-note">文件：${escapeHtml(filename)}<br />重复导入同一个词和释义时，只会合并阅读来源，不会创建重复卡片。</p>
+      <div class="dialog-actions"><button class="btn btn-soft" type="button" data-action="open-ai-word-pack">返回</button><button class="btn btn-primary" type="button" data-action="confirm-ai-word-pack">确认导入 ${pack.words.length} 个词</button></div>
+    </div>`);
+  }
+
+  async function inspectAiWordPack(file) {
+    try {
+      if (!file || file.size > AI_WORD_PACK_MAX_FILE_BYTES) throw new Error("文件超过 1.5MB 限制");
+      const parsed = JSON.parse(await file.text());
+      const pack = sanitizeAiWordPack(parsed);
+      runtime.pendingWordPack = { pack, filename: safeText(file.name, "AI 生词包", 180) };
+      renderAiWordPackPreview(pack, runtime.pendingWordPack.filename);
+    } catch (error) {
+      runtime.pendingWordPack = null;
+      console.warn(error);
+      toast(`无法导入：${safeText(error?.message, "生词包格式不正确", 120)}`, "⚠️");
+    }
+  }
+
+  function commitPendingWordPack() {
+    const pending = runtime.pendingWordPack;
+    if (!pending) return false;
+    const previousState = structuredClone(state);
+    const result = applyAiWordPack(state, pending.pack);
+    invalidateCustomCatalog();
+    if (!saveState()) {
+      state = previousState;
+      invalidateCustomCatalog();
+      renderAiWordPackPreview(pending.pack, pending.filename);
+      return false;
+    }
+    runtime.notebookSource = pending.pack.sourceTag;
+    runtime.pendingWordPack = null;
+    closeDialog();
+    render();
+    const mergedText = result.merged ? `，另合并 ${result.merged} 个已有词` : "";
+    toast(`已导入 ${result.added} 个新词${mergedText}`, "✦");
+    return true;
+  }
+
   function readCustomWordDraft() {
+    const existingImage = runtime.editingCustomId ? getWord(runtime.editingCustomId)?.visual?.image : "";
     return sanitizeCustomWordDraft({
       word: document.getElementById("customWord")?.value,
       pos: document.getElementById("customPos")?.value,
@@ -4965,7 +5293,7 @@
       example: document.getElementById("customExample")?.value,
       context: document.getElementById("customContext")?.value,
       sourceTag: document.getElementById("customSource")?.value,
-      image: document.getElementById("customImage")?.value
+      image: document.getElementById("customImage")?.value || existingImage
     }, runtime.editingCustomId || "");
   }
 
@@ -5117,6 +5445,7 @@
     clearPkTimer();
     runtime.pendingImport = null;
     runtime.pendingCustomDraft = null;
+    runtime.pendingWordPack = null;
     if (dialog.open) dialog.close();
   }
 
@@ -5371,6 +5700,10 @@
     else if (action === "remove-saved-word") removeSavedWord(target.dataset.cardId);
     else if (action === "remove-saved-source") removeSavedWordSource(target.dataset.cardId, target.dataset.sourceIndex);
     else if (action === "open-add-word") showNotebookDialog("existing");
+    else if (action === "open-ai-word-pack") showAiWordPackDialog();
+    else if (action === "copy-ai-word-pack-prompt") copyAiWordPackPrompt();
+    else if (action === "select-ai-word-pack") document.getElementById("aiWordPackFile")?.click();
+    else if (action === "confirm-ai-word-pack") commitPendingWordPack();
     else if (action === "reset-notebook-filters") {
       runtime.notebookQuery = "";
       runtime.notebookStatus = "all";
@@ -5675,6 +6008,11 @@
       input.value = "";
       importData(file);
     }
+    else if (input.id === "aiWordPackFile" && input.files?.[0]) {
+      const file = input.files[0];
+      input.value = "";
+      inspectAiWordPack(file);
+    }
   });
 
   dialog.addEventListener("click", (event) => {
@@ -5721,8 +6059,12 @@
     sanitizeRecognitionEvents,
     sanitizeRecognitionPlans,
     invalidateWordCatalogCaches,
+    safeCustomImage,
     sanitizeCustomWordDraft,
     sanitizeCustomWords,
+    sanitizeAiWordPack,
+    applyAiWordPack,
+    compactBackupJson,
     sanitizeSavedWords,
     mergeReadingSources,
     savedTrainingIds,

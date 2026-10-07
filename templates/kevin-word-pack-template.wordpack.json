@@ -1,0 +1,30 @@
+{
+  "format": "kevin-word-quest-ai-pack",
+  "version": 1,
+  "title": "Replace with a short pack title",
+  "source": "Replace with the book or reading source",
+  "trainByDefault": true,
+  "words": [
+    {
+      "word": "whispered",
+      "partOfSpeech": "verb",
+      "ipa": "/ˈwɪspərd/",
+      "lemma": "whisper",
+      "formType": "past tense",
+      "definition": "spoke very quietly",
+      "example": "The dragon whispered a secret.",
+      "context": "Replace with the original reading sentence, or leave blank.",
+      "spellingChunks": [
+        "whis",
+        "pered"
+      ],
+      "memoryTip": "Picture a secret travelling quietly from one ear to another.",
+      "train": true,
+      "image": {
+        "mimeType": "image/webp",
+        "base64": "AI_MUST_REPLACE_THIS_WITH_REAL_BASE64_IMAGE_DATA",
+        "alt": "A child quietly sharing a secret"
+      }
+    }
+  ]
+}

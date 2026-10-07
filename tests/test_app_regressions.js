@@ -106,6 +106,7 @@ const context = {
   Map,
   URL,
   Blob,
+  atob,
   structuredClone,
   setTimeout,
   clearTimeout,
@@ -190,6 +191,13 @@ assert.match(practiceSource, /aria-label="\$\{coreEnglish \? "Book picture clue"
 assert.match(coreExerciseSource, /Skip this optional exercise and return to today's tasks\./, "a workbook page without answers must route back to today's plan");
 assert.match(practiceCompleteSource, /Skip optional exercise · Back to today/);
 assert.match(appSource, /TODAY'S SESSION IS PAUSED/, "a missing catalog must show an explicit paused-session message");
+assert.match(appSource, /AI 批量生成与导入/, "My Words must expose the AI word-pack workflow");
+const indexSource = fs.readFileSync(path.join(__dirname, "..", "index.html"), "utf8");
+assert.match(indexSource, /id="aiWordPackFile"[^>]+\.wordpack\.json/, "the AI word-pack file picker must accept the documented extension");
+const wordPackTemplate = JSON.parse(fs.readFileSync(path.join(__dirname, "..", "templates", "kevin-word-pack-template.wordpack.json"), "utf8"));
+assert.equal(wordPackTemplate.format, "kevin-word-quest-ai-pack");
+assert.equal(wordPackTemplate.version, 1);
+assert.match(fs.readFileSync(path.join(__dirname, "..", "templates", "AI_WORD_PACK_PROMPT.md"), "utf8"), /不要在聊天正文中粘贴大段 Base64/);
 const stylesSource = fs.readFileSync(path.join(__dirname, "..", "assets", "styles.css"), "utf8");
 assert.match(stylesSource, /@media \(max-width: 820px\)[\s\S]*?\.btn-small\s*\{\s*min-height:\s*44px;/, "small mobile controls must keep a 44px touch target");
 assert.match(stylesSource, /\.notebook-tabs button\s*\{[\s\S]*?min-height:\s*44px;/, "My Words tabs must keep a 44px touch target");
@@ -206,7 +214,7 @@ assert.equal(api.isBankAvailable("pet"), false, "a missing PET script must only 
 assert.equal(api.firstAvailableBank(), "core2000");
 assert.equal(api.safeBank("pet"), "core2000", "an unavailable selected bank must fall back to the first available bank");
 assert.equal(api.safeKnownBank("pet"), "pet", "historical bank labels must not depend on whether the bank script loaded today");
-assert.equal(api.appVersion, "2026.10.01");
+assert.equal(api.appVersion, "2026.10.07");
 assert.deepEqual(JSON.parse(JSON.stringify(api.bankAvailability().pet)), { available: false, count: 0 });
 assert.equal(api.coreExerciseAvailable({ coreExerciseId: "core2000-b1-u01-a-exercise" }), true);
 const savedCoreAnswers = windowStub.CORE2000_EXERCISE_ANSWERS["core2000-b1-u01-a-exercise"];
@@ -911,6 +919,78 @@ assert.equal(customDraft.visual.image, undefined, "custom picture input must rej
 assert.ok(customDraft.breakdown.parts.length > 1, "custom cards need safe visual spelling chunks for the shared study view");
 assert.equal(customDraft.breakdown.type, "spelling chunks");
 assert.equal(api.sanitizeCustomWordDraft({ word: "123", en: "a number", example: "It is 123." }), null);
+
+const tinyPngBase64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
+const aiWordPack = api.sanitizeAiWordPack({
+  format: "kevin-word-quest-ai-pack",
+  version: 1,
+  title: "Dragon Masters test pack",
+  source: "Dragon Masters",
+  trainByDefault: true,
+  words: [{
+    word: "whispered",
+    partOfSpeech: "verb",
+    ipa: "/ˈwɪspərd/",
+    lemma: "whisper",
+    formType: "past tense",
+    definition: "spoke very quietly",
+    example: "The dragon whispered a secret.",
+    context: "The dragon whispered into Ana's ear.",
+    spellingChunks: ["whis", "pered"],
+    memoryTip: "Picture a secret moving quietly.",
+    image: { mimeType: "image/png", base64: tinyPngBase64, alt: "A quiet secret" }
+  }]
+});
+assert.equal(aiWordPack.words.length, 1);
+assert.equal(aiWordPack.words[0].draft.ipa, "/ˈwɪspərd/");
+assert.deepEqual(Array.from(aiWordPack.words[0].draft.breakdown.parts, (part) => part.text), ["whis", "pered"]);
+assert.match(aiWordPack.words[0].draft.visual.image, /^data:image\/png;base64,/);
+assert.ok(aiWordPack.imageBytes > 32);
+assert.equal(api.safeCustomImage("data:image/svg+xml;base64,PHN2Zz48L3N2Zz4="), "", "embedded SVG must not be accepted as a card image");
+assert.equal(api.safeCustomImage("data:image/png;base64,QUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFB"), "", "a mislabeled Base64 payload must not pass image validation");
+assert.throws(() => api.sanitizeAiWordPack({
+  format: "kevin-word-quest-ai-pack",
+  version: 1,
+  source: "Broken pack",
+  words: [{ word: "empty", definition: "with nothing inside", example: "The box is empty.", image: { mimeType: "image/webp", base64: "" } }]
+}), /缺少|图片|有效单词/);
+const importedWordPackState = { customWords: {}, savedWords: {} };
+const firstWordPackImport = api.applyAiWordPack(importedWordPackState, aiWordPack, 1_000);
+assert.equal(firstWordPackImport.added, 1);
+assert.equal(Object.keys(importedWordPackState.customWords).length, 1);
+const importedWordPackId = firstWordPackImport.importedIds[0];
+assert.equal(importedWordPackState.savedWords[importedWordPackId].train, true);
+assert.match(importedWordPackState.customWords[importedWordPackId].visual.image, /^data:image\/png;base64,/);
+const repeatedWordPackImport = api.applyAiWordPack(importedWordPackState, aiWordPack, 2_000);
+assert.equal(repeatedWordPackImport.added, 0);
+assert.equal(repeatedWordPackImport.merged, 1, "reimporting the same AI card must merge its reading source instead of duplicating the card");
+assert.equal(Object.keys(importedWordPackState.customWords).length, 1);
+assert.equal(api.sanitizeCustomWords(importedWordPackState.customWords)[importedWordPackId].ipa, "/ˈwɪspərd/", "embedded pictures and IPA must survive a state reload");
+const archivedAiImportState = {
+  customWords: {
+    "custom:archived-ai-001": {
+      ...aiWordPack.words[0].draft,
+      id: "custom:archived-ai-001",
+      archived: true,
+      archivedSavedEntry: {
+        train: false,
+        addedAt: 500,
+        sources: [{ sourceTag: "Older Reader", context: "An older context.", addedAt: 500 }]
+      }
+    }
+  },
+  savedWords: {}
+};
+api.applyAiWordPack(archivedAiImportState, aiWordPack, 3_000);
+assert.equal(archivedAiImportState.customWords["custom:archived-ai-001"].archived, false);
+assert.equal(archivedAiImportState.savedWords["custom:archived-ai-001"].sources.length, 2, "restoring an archived AI card must preserve all earlier reading sources");
+const compactAiBackup = JSON.parse(api.compactBackupJson(JSON.stringify({
+  customWords: importedWordPackState.customWords,
+  progress: { "custom:test": { correct: 7 } }
+})));
+assert.equal(compactAiBackup.customWords[importedWordPackId].visual.image, undefined, "the rolling local backup must not duplicate embedded image bytes");
+assert.equal(compactAiBackup.customWords[importedWordPackId].visual.emoji, "📖");
+assert.equal(compactAiBackup.progress["custom:test"].correct, 7, "compacting pictures must preserve learning evidence");
 
 const archivedCustomDraft = api.sanitizeCustomWordDraft({
   ...customDraft,

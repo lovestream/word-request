@@ -28,6 +28,12 @@ python3 start_word_quest.py --stop
 
 The app is static and can be published directly with GitHub Pages or Cloudflare Pages. Use the repository root as the site directory; no build command is required.
 
+## AI word packs
+
+Open **My Words → AI 批量生成与导入** to copy the ready-to-use prompt, download the JSON template, and import a parent-checked `.wordpack.json` file. The format embeds compressed WebP/PNG/JPEG pictures inside one portable JSON file, so no image folder or server upload is required. Each pack is limited to 20 cards, 24KB per image, and 1.5MB total.
+
+The canonical prompt and blank template live in [`templates/AI_WORD_PACK_PROMPT.md`](templates/AI_WORD_PACK_PROMPT.md) and [`templates/kevin-word-pack-template.wordpack.json`](templates/kevin-word-pack-template.wordpack.json).
+
 ## Tests
 
 ```bash
