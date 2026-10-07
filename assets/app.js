@@ -103,6 +103,7 @@
     notebookStatus: "all",
     notebookSourceFilter: "all",
     notebookSort: "recent",
+    notebookSelectedIds: new Set(),
     notebookDialogTab: "existing",
     editingCustomId: null,
     pendingCustomDraft: null,
@@ -125,6 +126,7 @@
     runtime.bookQuery = "";
     runtime.notebookQuery = "";
     runtime.notebookSearchTimer = null;
+    runtime.notebookSelectedIds.clear();
     runtime.editingCustomId = null;
     runtime.pendingCustomDraft = null;
     runtime.pendingWordPack = null;
@@ -3357,6 +3359,7 @@
   }
 
   function afterRender() {
+    if (route === "notebook") syncNotebookSelectionControls();
     if (route === "practice") {
       window.setTimeout(() => document.querySelector(".letter-cell:not([disabled])")?.focus(), 60);
     }
@@ -4164,7 +4167,10 @@
           : { key: "saved", label: "只收藏" };
     const nextReview = spelling?.dueAt ? relativeDue(spelling.dueAt) : "";
     const sourceChips = sources.map((source, index) => `<span class="saved-word-source">${escapeHtml(source.sourceTag)}${source.context ? ` · ${escapeHtml(source.context)}` : ""}<button type="button" data-action="remove-saved-source" data-card-id="${escapeHtml(word.id)}" data-source-index="${index}" aria-label="移除来源 ${escapeHtml(source.sourceTag)}">×</button></span>`).join("");
-    return `<article class="notebook-word-card" data-card-id="${escapeHtml(word.id)}">
+    const selectable = savedEntry && !inCatalog;
+    const selected = selectable && runtime.notebookSelectedIds.has(word.id);
+    return `<article class="notebook-word-card${selected ? " is-selected" : ""}" data-card-id="${escapeHtml(word.id)}">
+      ${selectable ? `<label class="notebook-card-select"><input type="checkbox" data-notebook-select="${escapeHtml(word.id)}" aria-label="选择 ${escapeHtml(word.word)}" ${selected ? "checked" : ""} /><span>选择</span></label>` : ""}
       <div class="notebook-word-visual">${image}</div>
       <div class="notebook-word-copy">
         <div class="notebook-word-title"><span class="book-tag">${escapeHtml(bank.icon)} ${escapeHtml(bank.short)}</span>${word.custom && word.lemma && normalizeAnswer(word.lemma) !== normalizeAnswer(word.word) ? `<span class="word-family-tag">FORM OF ${escapeHtml(word.lemma)}${word.formType ? ` · ${escapeHtml(word.formType)}` : ""}</span>` : ""}</div>
@@ -4216,9 +4222,9 @@
     return `<article class="archived-word-row"><div><strong>${escapeHtml(word.word)}</strong><span>${escapeHtml(word.sourceTag)} · ${escapeHtml(word.en)}</span></div><button class="btn btn-small btn-soft" type="button" data-action="restore-custom-word" data-card-id="${escapeHtml(word.id)}">恢复到 My Words</button></article>`;
   }
 
-  function renderNotebook() {
+  function notebookVisibleEntries() {
     const query = normalizeAnswer(runtime.notebookQuery).trim();
-    const savedEntries = Object.values(state.savedWords || {})
+    return Object.values(state.savedWords || {})
       .filter((entry) => {
         const word = getWord(entry.cardId);
         if (!word) return false;
@@ -4234,6 +4240,17 @@
         if (runtime.notebookSort === "due") return (spellingProgress(left.cardId)?.dueAt || Number.MAX_SAFE_INTEGER) - (spellingProgress(right.cardId)?.dueAt || Number.MAX_SAFE_INTEGER);
         return right.addedAt - left.addedAt || left.cardId.localeCompare(right.cardId);
       });
+  }
+
+  function renderNotebook() {
+    const savedEntries = notebookVisibleEntries();
+    const visibleIds = new Set(savedEntries.map((entry) => entry.cardId));
+    runtime.notebookSelectedIds = new Set([...runtime.notebookSelectedIds].filter((id) => visibleIds.has(id)));
+    const bulkToolbar = savedEntries.length ? `<section class="notebook-bulk-bar" aria-label="生词批量操作">
+      <label class="notebook-select-all"><input id="notebookSelectAll" type="checkbox" ${runtime.notebookSelectedIds.size === savedEntries.length ? "checked" : ""} /><span>全选当前结果（${savedEntries.length}）</span></label>
+      <span id="notebookSelectionCount" role="status">已选 ${runtime.notebookSelectedIds.size} 个</span>
+      <div class="notebook-bulk-actions"><button class="btn btn-small btn-primary" type="button" data-action="bulk-saved-training" data-train="true" ${runtime.notebookSelectedIds.size ? "" : "disabled"}>批量加入训练候选</button><button class="btn btn-small btn-soft" type="button" data-action="bulk-saved-training" data-train="false" ${runtime.notebookSelectedIds.size ? "" : "disabled"}>批量改为只收藏</button><button class="btn btn-small btn-ghost" type="button" data-action="clear-notebook-selection" ${runtime.notebookSelectedIds.size ? "" : "disabled"}>取消选择</button></div>
+    </section>` : "";
     const savedCards = savedEntries
       .map((entry) => getWord(entry.cardId))
       .filter(Boolean)
@@ -4248,6 +4265,7 @@
       <header class="notebook-header"><div><p class="eyebrow">MY WORDS</p><h1>阅读中遇到的词，都放在这里</h1><p>从 Mighty Robot、Dragon Masters 或其他阅读中收藏生词，再决定是否进入训练。</p></div><div class="notebook-header-actions"><button class="btn btn-soft" type="button" data-action="open-ai-word-pack">✦ AI 批量生成与导入</button><button class="btn btn-primary" type="button" data-action="open-add-word">＋ 添加阅读生词</button></div></header>
       <section class="notebook-summary" aria-label="生词本概览"><div><strong>${allSavedEntries.length}</strong><span>收藏总数</span></div><div><strong>${trainingCount}</strong><span>训练候选</span></div><div><strong>${reviewingCount}</strong><span>已进入复习</span></div><div><strong>${sourceNames.length}</strong><span>来源数</span></div></section>
       <section class="notebook-toolbar"><label class="search-box"><span aria-hidden="true">⌕</span><input id="notebookSearch" type="search" autocomplete="off" placeholder="搜索已收藏的词" value="${escapeHtml(runtime.notebookQuery)}" /></label><select id="notebookStatus" aria-label="状态筛选"><option value="all" ${runtime.notebookStatus === "all" ? "selected" : ""}>全部状态</option><option value="training" ${runtime.notebookStatus === "training" ? "selected" : ""}>训练中</option><option value="saved" ${runtime.notebookStatus === "saved" ? "selected" : ""}>只收藏</option><option value="custom" ${runtime.notebookStatus === "custom" ? "selected" : ""}>自建词</option></select><select id="notebookSourceFilter" aria-label="来源筛选"><option value="all">全部来源</option>${sourceNames.map((name) => `<option value="${escapeHtml(name)}" ${runtime.notebookSourceFilter === name ? "selected" : ""}>${escapeHtml(name)}</option>`).join("")}</select><select id="notebookSort" aria-label="排序"><option value="recent" ${runtime.notebookSort === "recent" ? "selected" : ""}>最近加入</option><option value="due" ${runtime.notebookSort === "due" ? "selected" : ""}>下次复习</option><option value="az" ${runtime.notebookSort === "az" ? "selected" : ""}>A–Z</option></select></section>
+      ${bulkToolbar}
       <section class="notebook-section"><div class="notebook-word-grid">${savedCards || `<div class="notebook-empty"><span>📖</span><h2>${allSavedEntries.length ? "没有符合筛选条件的词" : "阅读时遇到不会的词，就把它放进来。"}</h2><p>${allSavedEntries.length ? "换一个状态、来源或搜索词试试。" : "可以先收藏，之后再决定是否加入每天的训练。"}</p><button class="btn btn-primary" type="button" data-action="${allSavedEntries.length ? "reset-notebook-filters" : "open-add-word"}">${allSavedEntries.length ? "清除筛选后再看" : "添加第一个阅读生词"}</button></div>`}</div></section>
       ${archivedCustomWords.length ? `<section class="notebook-section archived-word-section"><div class="card-head"><div><h2>已归档自建词</h2><p>历史仍保留，可随时恢复。</p></div></div>${archivedCustomWords.map(renderArchivedCustomWord).join("")}</section>` : ""}
     </section>`;
@@ -5131,6 +5149,52 @@
     toast(entry.train ? "已加入后续训练候选" : "已改为只收藏", entry.train ? "✦" : "♡");
   }
 
+  function syncNotebookSelectionControls() {
+    const visibleIds = new Set(notebookVisibleEntries().map((entry) => entry.cardId));
+    runtime.notebookSelectedIds = new Set([...runtime.notebookSelectedIds].filter((id) => visibleIds.has(id)));
+    const count = runtime.notebookSelectedIds.size;
+    const selectAll = document.getElementById("notebookSelectAll");
+    if (selectAll) {
+      selectAll.checked = count > 0 && count === visibleIds.size;
+      selectAll.indeterminate = count > 0 && count < visibleIds.size;
+    }
+    const countLabel = document.getElementById("notebookSelectionCount");
+    if (countLabel) countLabel.textContent = `已选 ${count} 个`;
+    document.querySelectorAll('[data-action="bulk-saved-training"], [data-action="clear-notebook-selection"]').forEach((button) => {
+      button.disabled = count === 0;
+    });
+    document.querySelectorAll("[data-notebook-select]").forEach((checkbox) => {
+      checkbox.checked = runtime.notebookSelectedIds.has(checkbox.dataset.notebookSelect);
+      checkbox.closest(".notebook-word-card")?.classList.toggle("is-selected", checkbox.checked);
+    });
+  }
+
+  function setSavedWordsTraining(targetState, cardIds, train) {
+    let changed = 0;
+    for (const id of new Set(cardIds)) {
+      const entry = targetState.savedWords?.[id];
+      if (!entry || entry.train === Boolean(train)) continue;
+      entry.train = Boolean(train);
+      changed += 1;
+    }
+    return changed;
+  }
+
+  function bulkSavedWordTraining(train) {
+    const visibleIds = new Set(notebookVisibleEntries().map((entry) => entry.cardId));
+    const selectedIds = [...runtime.notebookSelectedIds].filter((id) => visibleIds.has(id));
+    if (!selectedIds.length) return;
+    const previousFlags = selectedIds.map((id) => [id, state.savedWords[id].train]);
+    const changed = setSavedWordsTraining(state, selectedIds, train);
+    if (changed && !saveState()) {
+      for (const [id, previousTrain] of previousFlags) state.savedWords[id].train = previousTrain;
+      return;
+    }
+    runtime.notebookSelectedIds.clear();
+    render();
+    toast(changed ? `${changed} 个词${train ? "已加入后续训练候选" : "已改为只收藏"}` : "选中的词已经处于这个状态", train ? "✦" : "♡");
+  }
+
   function removeSavedWord(cardId) {
     const id = canonicalWordId(cardId);
     const word = getWord(id);
@@ -5697,6 +5761,11 @@
     else if (action === "select-bank") chooseBank(target.dataset.bank);
     else if (action === "save-word") saveWordToNotebook(target.dataset.cardId, target.dataset.train === "true");
     else if (action === "toggle-saved-training") toggleSavedWordTraining(target.dataset.cardId);
+    else if (action === "bulk-saved-training") bulkSavedWordTraining(target.dataset.train === "true");
+    else if (action === "clear-notebook-selection") {
+      runtime.notebookSelectedIds.clear();
+      syncNotebookSelectionControls();
+    }
     else if (action === "remove-saved-word") removeSavedWord(target.dataset.cardId);
     else if (action === "remove-saved-source") removeSavedWordSource(target.dataset.cardId, target.dataset.sourceIndex);
     else if (action === "open-add-word") showNotebookDialog("existing");
@@ -5993,7 +6062,19 @@
 
   document.addEventListener("change", (event) => {
     const input = event.target;
-    if (input.name === "dailyGoal") applyDailyGoal(input.value);
+    if (input.id === "notebookSelectAll") {
+      runtime.notebookSelectedIds = input.checked
+        ? new Set(notebookVisibleEntries().map((entry) => entry.cardId))
+        : new Set();
+      syncNotebookSelectionControls();
+    }
+    else if (input.dataset.notebookSelect) {
+      const id = input.dataset.notebookSelect;
+      if (input.checked) runtime.notebookSelectedIds.add(id);
+      else runtime.notebookSelectedIds.delete(id);
+      syncNotebookSelectionControls();
+    }
+    else if (input.name === "dailyGoal") applyDailyGoal(input.value);
     else if (input.name === "practiceMode") applyPracticeMode(input.value);
     else if (input.id === "soundToggle") {
       state.settings.sound = input.checked;
@@ -6068,6 +6149,7 @@
     sanitizeSavedWords,
     mergeReadingSources,
     savedTrainingIds,
+    setSavedWordsTraining,
     practiceCueType,
     practiceGradeForTask,
     createAttemptEvent,

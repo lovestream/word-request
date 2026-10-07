@@ -2226,6 +2226,63 @@ button:disabled {
   margin-top: 28px;
 }
 
+.notebook-bulk-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 18px;
+  align-items: center;
+  margin-top: 18px;
+  padding: 14px 18px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: rgba(97, 197, 207, 0.12);
+}
+
+.notebook-select-all,
+.notebook-card-select {
+  display: flex;
+  min-height: 44px;
+  gap: 10px;
+  align-items: center;
+  color: var(--forest);
+  font-size: 12px;
+  font-weight: 900;
+  cursor: pointer;
+}
+
+.notebook-select-all input,
+.notebook-card-select input {
+  width: 20px;
+  height: 20px;
+  margin: 0;
+  accent-color: var(--forest);
+}
+
+.notebook-bulk-actions {
+  display: flex;
+  flex: 1;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+#notebookSelectionCount {
+  color: var(--ink-soft);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.notebook-card-select {
+  grid-column: 1 / -1;
+  justify-content: flex-end;
+  margin-top: -8px;
+}
+
+.notebook-word-card.is-selected {
+  border-color: var(--forest);
+  box-shadow: 0 0 0 2px rgba(97, 197, 207, 0.35);
+}
+
 .notebook-word-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
@@ -5463,6 +5520,16 @@ button:disabled {
     width: 100%;
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .notebook-bulk-actions {
+    flex-basis: 100%;
+    justify-content: flex-start;
+  }
+
+  .notebook-bulk-actions .btn {
+    min-height: 44px;
+    flex: 1 1 auto;
   }
 
   .word-pack-steps,

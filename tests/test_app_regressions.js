@@ -874,6 +874,19 @@ assert.deepEqual(JSON.parse(JSON.stringify(savedWordState.savedWords)), {
   }
 });
 assert.deepEqual(Array.from(api.savedTrainingIds(savedWordState)), ["ket:test"]);
+const bulkTrainingState = structuredClone(savedWordState);
+bulkTrainingState.today = { plannedReviewIds: ["ket:test"], newWordIds: ["core2000:test"], completed: false };
+bulkTrainingState.savedWords["core2000:test"] = {
+  cardId: "core2000:test", train: false, addedAt: 200,
+  sources: [{ sourceTag: "Another Reader", context: "A reading sentence.", addedAt: 200 }]
+};
+const bulkBefore = structuredClone(bulkTrainingState);
+assert.equal(api.setSavedWordsTraining(bulkTrainingState, ["ket:test", "core2000:test", "core2000:test", "missing:test"], true), 1);
+assert.equal(bulkTrainingState.savedWords["core2000:test"].train, true);
+assert.equal(api.setSavedWordsTraining(bulkTrainingState, ["ket:test", "core2000:test"], false), 2);
+assert.deepEqual(bulkTrainingState.savedWords["core2000:test"].sources, bulkBefore.savedWords["core2000:test"].sources);
+assert.deepEqual(bulkTrainingState.progress, bulkBefore.progress, "bulk candidate updates must preserve learning progress");
+assert.deepEqual(bulkTrainingState.today, bulkBefore.today, "bulk candidate updates must preserve today's plan");
 assert.deepEqual(
   Array.from(api.filterDueIdsForBank(["ket:test", "core2000:test"], "core2000", [], savedWordState)),
   ["ket:test", "core2000:test"],

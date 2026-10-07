@@ -78,3 +78,44 @@ test("mobile My Words exposes the AI pack workflow", async ({ page }) => {
   await page.getByRole("button", { name: "确认导入 1 个词" }).click();
   await expect(page.getByRole("heading", { name: /whispered/ })).toBeVisible();
 });
+
+test("My Words bulk selection respects filters and persists training flags", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.addInitScript(() => {
+    const key = "kevin-wordquest:state:v1";
+    if (localStorage.getItem(key)) return;
+    const record = { schemaVersion: 2, settings: {}, stats: {}, progress: {}, customWords: {}, savedWords: {} };
+    for (const [index, word] of ["apple", "banana", "cherry"].entries()) {
+      const id = `custom:bulk-test-${word}`;
+      record.customWords[id] = { id, word, en: `a fruit called ${word}`, example: `I ate an ${word}.`, sourceTag: "Test Reader" };
+      record.savedWords[id] = { cardId: id, train: false, addedAt: 100 + index, sources: [{ sourceTag: "Test Reader", context: "Original context.", addedAt: 100 }] };
+    }
+    localStorage.setItem(key, JSON.stringify(record));
+  });
+  await page.goto("/#notebook");
+  await expect(page.getByRole("button", { name: "批量加入训练候选", exact: true })).toBeDisabled();
+  await page.getByRole("checkbox", { name: "选择 apple", exact: true }).check();
+  await page.getByRole("checkbox", { name: "选择 banana", exact: true }).check();
+  await expect(page.locator("#notebookSelectionCount")).toHaveText("已选 2 个");
+  await expect(page.locator("#notebookSelectAll")).toHaveJSProperty("indeterminate", true);
+  await page.getByRole("button", { name: "批量加入训练候选", exact: true }).click();
+  await expect(page.locator(".notebook-summary > div").nth(1).locator("strong")).toHaveText("2");
+  await page.getByRole("combobox", { name: "状态筛选" }).selectOption("saved");
+  await expect(page.locator(".notebook-word-card")).toHaveCount(1);
+  await page.getByRole("checkbox", { name: /全选当前结果/ }).check();
+  await page.getByRole("button", { name: "批量加入训练候选", exact: true }).click();
+  await page.getByRole("combobox", { name: "状态筛选" }).selectOption("all");
+  await page.getByRole("checkbox", { name: /全选当前结果/ }).check();
+  await page.locator("#notebookSearch").fill("apple");
+  await expect(page.locator(".notebook-word-card")).toHaveCount(1);
+  await expect(page.locator("#notebookSelectionCount")).toHaveText("已选 1 个");
+  await page.getByRole("button", { name: "批量改为只收藏", exact: true }).click();
+  await page.reload();
+  await expect(page.locator(".notebook-summary > div").nth(1).locator("strong")).toHaveText("2");
+  const flags = await page.evaluate(() => {
+    const record = JSON.parse(localStorage.getItem("kevin-wordquest:state:v1"));
+    return ["apple", "banana", "cherry"].map((word) => record.savedWords[`custom:bulk-test-${word}`].train);
+  });
+  expect(flags).toEqual([false, true, true]);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth + 1)).toBe(false);
+});

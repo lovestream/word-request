@@ -34,6 +34,8 @@ Open **My Words → AI 批量生成与导入** to copy the ready-to-use prompt, 
 
 The canonical prompt and blank template live in [`templates/AI_WORD_PACK_PROMPT.md`](templates/AI_WORD_PACK_PROMPT.md) and [`templates/kevin-word-pack-template.wordpack.json`](templates/kevin-word-pack-template.wordpack.json).
 
+In **My Words**, select individual cards or **全选当前结果**, then use **批量加入训练候选** or **批量改为只收藏**. Select-all follows the current search and filters; hidden cards are excluded. Bulk changes preserve learning progress, reading sources, and today's existing plan.
+
 ## Tests
 
 ```bash
